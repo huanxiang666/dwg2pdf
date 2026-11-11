@@ -6,6 +6,8 @@ import argparse
 import json
 import multiprocessing
 import sys
+import threading
+import time
 from pathlib import Path
 
 from . import __version__
@@ -85,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--font-dir", action="append", default=[], help="extra font directory (SHX/TTF), repeatable")
     parser.add_argument("--report", default=None, help="write a JSON report of the batch run to this file")
     parser.add_argument("--converter-timeout", type=int, default=600, help="seconds allowed per external DWG conversion (default: 600)")
+    parser.add_argument("--large-dxf-mb", type=float, default=5.0, help="warn when the intermediate DXF exceeds this size in MB (default: 5)")
     parser.add_argument("--gui", action="store_true", help="launch the graphical interface")
     parser.add_argument("--check", action="store_true", help="print environment status (converters, libraries) and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose progress output")
@@ -150,6 +153,23 @@ def _print_progress(result, done: int, total: int, quiet: bool, verbose: bool) -
         print(f"[{done}/{total}] FAIL  {name}: {error}", flush=True)
 
 
+def _heartbeat_loop(state: dict, stop: "threading.Event", interval: float = 30.0, printer=None) -> None:
+    """Emit periodic progress signs-of-life until ``stop`` is set.
+
+    Big drawings can keep one file rendering for minutes; without this the
+    run looks hung (real user report). Module-level + injectable printer so
+    the timing behaviour is unit-testable without waiting 30s.
+    """
+    emit = printer or (lambda msg: print(msg, flush=True))
+    while not stop.wait(interval):
+        elapsed = time.monotonic() - state["start"]
+        emit(
+            f"[heartbeat] {state['done']}/{state['total']} done, "
+            f"{elapsed:.0f}s elapsed — still rendering, large drawings "
+            "can take minutes per file ..."
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()  # required for PyInstaller-frozen executables
     _ensure_utf8_stdio()  # must run before argparse (its help text contains CJK)
@@ -186,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             skip_existing=args.skip_existing,
             font_dirs=tuple(args.font_dir),
             converter_timeout=args.converter_timeout,
+            large_dxf_mb=args.large_dxf_mb,
             verbose=args.verbose,
         ).validate()
     except OptionError as exc:
@@ -209,7 +230,25 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         print(f"Converting {len(files)} file(s), jobs={opts.jobs or 'auto'} ...", flush=True)
     plans = plan_targets(files, opts.output_dir)
-    batch = run_batch(plans, opts, progress_cb=lambda r, d, t: _print_progress(r, d, t, args.quiet, args.verbose))
+
+    # Heartbeat: see _heartbeat_loop. The worker only reads the counter dict;
+    # GIL keeps int reads/writes atomic.
+    state = {"done": 0, "total": len(plans), "start": time.monotonic()}
+    stop_hb = threading.Event()
+
+    hb = None
+    if not args.quiet:
+        hb = threading.Thread(target=_heartbeat_loop, args=(state, stop_hb), daemon=True)
+        hb.start()
+
+    def _progress(r, d, t):
+        state["done"] = d
+        _print_progress(r, d, t, args.quiet, args.verbose)
+
+    try:
+        batch = run_batch(plans, opts, progress_cb=_progress)
+    finally:
+        stop_hb.set()
 
     if args.report:
         report_path = Path(args.report).expanduser()

@@ -112,6 +112,12 @@ class ConvertOptions:
         skip_existing: skip a file when its target PDF already exists.
         font_dirs: extra directories scanned for SHX/SHP/LFF/TTF fonts.
         converter_timeout: seconds allowed for one external DWG->DXF run.
+        large_dxf_mb: intermediate DXF size above which a "large drawing,
+            rendering can take minutes" warning is emitted. Measured on a
+            2020-class desktop: a 57 MB DXF (~14k modelspace entities, 5.7k
+            block inserts) takes ~3 min for modelspace; a paperspace layout
+            with several viewports re-renders the model per viewport and can
+            take far longer (~23 min observed for 3 viewports).
         verbose: surface extra diagnostics in logs.
     """
 
@@ -126,6 +132,7 @@ class ConvertOptions:
     skip_existing: bool = False
     font_dirs: tuple[str, ...] = field(default=())
     converter_timeout: int = 600
+    large_dxf_mb: float = 5.0
     verbose: bool = False
 
     def validate(self) -> ConvertOptions:
@@ -144,6 +151,8 @@ class ConvertOptions:
             raise OptionError(f"jobs must be >= 0, got {self.jobs}")
         if self.converter_timeout <= 0:
             raise OptionError(f"converter-timeout must be > 0, got {self.converter_timeout}")
+        if self.large_dxf_mb <= 0:
+            raise OptionError(f"large-dxf-mb must be > 0, got {self.large_dxf_mb}")
         return ConvertOptions(
             layout=layout,
             monochrome=bool(self.monochrome),
@@ -156,5 +165,6 @@ class ConvertOptions:
             skip_existing=bool(self.skip_existing),
             font_dirs=tuple(str(p) for p in self.font_dirs),
             converter_timeout=int(self.converter_timeout),
+            large_dxf_mb=float(self.large_dxf_mb),
             verbose=bool(self.verbose),
         )

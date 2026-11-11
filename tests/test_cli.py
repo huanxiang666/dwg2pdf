@@ -134,3 +134,24 @@ def test_check_does_not_crash_on_windows_console(tmp_path, monkeypatch):
     assert code == EXIT_OK
     # Something was written and it decodes as UTF-8 (the reconfigured stream).
     assert b"dwg2pdf" in buf.getvalue()
+
+
+def test_heartbeat_emits_periodically():
+    """The long-render heartbeat must actually emit progress lines."""
+    import threading
+    import time as _time
+
+    from dwg2pdf.cli import _heartbeat_loop
+
+    state = {"done": 1, "total": 5, "start": _time.monotonic()}
+    stop = threading.Event()
+    lines: list[str] = []
+    t = threading.Thread(
+        target=_heartbeat_loop, args=(state, stop, 0.03, lines.append), daemon=True
+    )
+    t.start()
+    _time.sleep(0.15)
+    stop.set()
+    t.join(timeout=2)
+    assert len(lines) >= 2, f"expected periodic heartbeats, got {lines}"
+    assert "[heartbeat]" in lines[0] and "1/5" in lines[0]

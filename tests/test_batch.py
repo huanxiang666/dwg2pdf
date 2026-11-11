@@ -106,6 +106,20 @@ def test_convert_one_missing_dwg_reports_clearly(tmp_path):
     assert res.error
 
 
+def test_large_drawing_warning(tmp_path):
+    """A DXF above large_dxf_mb must produce an explicit slow-render warning
+    (regression for the '相岙水库.dwg looks hung' user report)."""
+    src = write_colored_dxf(tmp_path / "big.dxf")
+    opts = ConvertOptions(layout="modelspace", large_dxf_mb=0.0001)  # tiny threshold
+    res = convert_one(src, tmp_path / "big.pdf", opts)
+    assert res.status == STATUS_OK
+    assert any("large drawing" in w for w in res.warnings)
+    # default threshold (5 MB) → no warning for the tiny fixture
+    res2 = convert_one(src, tmp_path / "big2.pdf", ConvertOptions(layout="modelspace"))
+    assert res2.status == STATUS_OK
+    assert not any("large drawing" in w for w in res2.warnings)
+
+
 def _make_batch_inputs(tmp_path, count=4, corrupt_index=2):
     paths = []
     for i in range(count):

@@ -191,6 +191,27 @@ def _worker_init(opts: ConvertOptions) -> None:
     setup_font_dirs(opts.font_dirs)
 
 
+def _large_drawing_note(dxf_path: Path, opts: ConvertOptions) -> str | None:
+    """Size-based heads-up that rendering may take minutes.
+
+    The render cost scales with recorded path count (measured: ~57 MB DXF ≈
+    3 min modelspace on a 2020-class desktop; layout pages with viewports
+    re-render the model per viewport and can take far longer). We cannot know
+    the exact cost cheaply, so the intermediate DXF size is the proxy.
+    """
+    try:
+        size_mb = dxf_path.stat().st_size / 1e6
+    except OSError:
+        return None
+    if size_mb >= opts.large_dxf_mb:
+        return (
+            f"large drawing ({size_mb:.0f} MB DXF): rendering can take minutes; "
+            "if this DWG has layout pages with viewports, '--layout modelspace' "
+            "is usually much faster"
+        )
+    return None
+
+
 def convert_one(source: str | Path, target: str | Path, opts: ConvertOptions) -> FileResult:
     """Convert a single file. Never raises — all failures become FileResult."""
     source = Path(source)
@@ -203,6 +224,7 @@ def convert_one(source: str | Path, target: str | Path, opts: ConvertOptions) ->
             result.seconds = time.perf_counter() - started
             return result
 
+        note: str | None = None
         if source.suffix.lower() == ".dwg":
             converter = detect_converter()
             if converter is None:
@@ -214,14 +236,22 @@ def convert_one(source: str | Path, target: str | Path, opts: ConvertOptions) ->
                 convert_dwg_to_dxf(
                     source, tmp_dxf, converter, timeout=opts.converter_timeout
                 )
+                note = _large_drawing_note(tmp_dxf, opts)
+                if note:
+                    print(f"[warn] {source.name}: {note}", file=sys.stderr, flush=True)
+                    result.warnings.append(note)
                 render = render_dxf_to_pdf(tmp_dxf, target, opts)
         else:
+            note = _large_drawing_note(source, opts)
+            if note:
+                print(f"[warn] {source.name}: {note}", file=sys.stderr, flush=True)
+                result.warnings.append(note)
             render = render_dxf_to_pdf(source, target, opts)
 
         result.status = STATUS_OK
         result.pages = render.pages
         result.layouts = render.layouts
-        result.warnings = list(render.warnings)
+        result.warnings.extend(render.warnings)
     except (RenderError, DwgConvertError) as exc:
         result.status = STATUS_FAILED
         result.error = str(exc)

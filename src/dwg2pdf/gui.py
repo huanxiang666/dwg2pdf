@@ -13,6 +13,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from . import __version__
@@ -224,6 +225,7 @@ class App:
         self._last_output_dir = opts.output_dir or str(files[0].parent)
         plans = plan_targets(files, opts.output_dir)
         self._running = True
+        self._start_ts = time.monotonic()
         self.convert_btn.configure(state="disabled")
         self.progress.configure(maximum=len(plans), value=0)
         self.status_var.set(f"0 / {len(plans)}")
@@ -288,6 +290,16 @@ class App:
         self.log.configure(state="disabled")
 
     def _poll_queue(self) -> None:
+        # Live elapsed time so long renders visibly progress instead of
+        # looking frozen (big drawings can take minutes per file).
+        if self._running:
+            elapsed = time.monotonic() - getattr(self, "_start_ts", time.monotonic())
+            try:
+                done = int(float(self.progress["value"] or 0))
+                total = int(float(self.progress["maximum"] or 0))
+            except (ValueError, TypeError):
+                done, total = 0, 0
+            self.status_var.set(f"转换中… {done}/{total}，已用时 {elapsed:.0f}s")
         try:
             while True:
                 msg = self.q.get_nowait()
