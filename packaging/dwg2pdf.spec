@@ -29,9 +29,13 @@ _common = dict(
     hookspath=[],
     runtime_hooks=[],
     # matplotlib is only needed by ezdxf's *matplotlib* backend, which this
-    # tool never imports (PDF export uses the PyMuPDF backend). Excluding it
-    # roughly halves the bundle size.
-    excludes=["IPython", "notebook", "sphinx", "pandas", "matplotlib", "PyQt5", "PyQt6", "PySide6"],
+    # tool never imports (PDF export uses the PyMuPDF backend). onnxruntime is
+    # an optional PyMuPDF extra (OCR/AI features) that we never call.
+    excludes=[
+        "IPython", "notebook", "sphinx", "pandas",
+        "matplotlib", "PyQt5", "PyQt6", "PySide6",
+        "onnxruntime",
+    ],
     noarchive=False,
 )
 
