@@ -17,6 +17,39 @@ EXIT_SOME_FAILED = 1
 EXIT_USAGE = 2
 
 
+def _ensure_utf8_stdio() -> None:
+    """Make stdout/stderr emit non-ASCII (Chinese) text without crashing.
+
+    On Windows a redirected/piped console defaults to the locale codepage
+    (e.g. cp1252); printing CJK hints such as the DWG-converter install guide
+    then raises UnicodeEncodeError and aborts the run. Reconfigure any
+    non-UTF-8 stream to UTF-8 with a replacement fallback. Streams already in
+    UTF-8 (Linux, macOS, pytest capture) are left untouched.
+    """
+    import io
+
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        encoding = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
+        if "utf8" in encoding:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+            continue
+        except Exception:
+            pass
+        buffer = getattr(stream, "buffer", None)
+        if buffer is not None:
+            try:
+                setattr(
+                    sys,
+                    name,
+                    io.TextIOWrapper(buffer, encoding="utf-8", errors="replace"),
+                )
+            except Exception:
+                pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dwg2pdf",
@@ -119,6 +152,7 @@ def _print_progress(result, done: int, total: int, quiet: bool, verbose: bool) -
 
 def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()  # required for PyInstaller-frozen executables
+    _ensure_utf8_stdio()  # must run before argparse (its help text contains CJK)
     parser = build_parser()
     args = parser.parse_args(argv)
 

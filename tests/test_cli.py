@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from conftest import write_colored_dxf, write_corrupt_dxf
 
-from dwg2pdf.cli import EXIT_OK, EXIT_SOME_FAILED, EXIT_USAGE, main
+from dwg2pdf.cli import EXIT_OK, EXIT_SOME_FAILED, EXIT_USAGE, _ensure_utf8_stdio, main
 
 
 def test_cli_converts_single_file(tmp_path, sample_dxf, capsys):
@@ -102,3 +104,33 @@ def test_cli_skip_existing(tmp_path, capsys):
     assert main([str(src), "-o", str(out), "-j", "1", "--skip-existing"]) == EXIT_OK
     captured = capsys.readouterr()
     assert "skipped" in captured.out.lower() or "SKIP" in captured.out
+
+
+def test_ensure_utf8_stdio_survives_windows_codepage(monkeypatch):
+    """Regression: on Windows a piped console uses cp1252; printing the CJK
+    install hint used to raise UnicodeEncodeError and abort the run. After
+    _ensure_utf8_stdio the same write must succeed and round-trip as UTF-8."""
+    buf = io.BytesIO()
+    # cp1252 + strict reproduces the Windows console exactly: CJK -> raise.
+    fake = io.TextIOWrapper(buf, encoding="cp1252", errors="strict")
+    # Sanity: without the fix this write genuinely fails on cp1252.
+    with pytest.raises(UnicodeEncodeError):
+        fake.write("没有找到 DWG 转换器")
+        fake.flush()
+    monkeypatch.setattr(sys, "stdout", fake)
+    _ensure_utf8_stdio()
+    sys.stdout.write("没有找到 DWG 转换器 ODA File Converter")
+    sys.stdout.flush()
+    assert "转换器" in buf.getvalue().decode("utf-8")
+
+
+def test_check_does_not_crash_on_windows_console(tmp_path, monkeypatch):
+    """--check emits the bilingual install hint; it must not raise under a
+    non-UTF-8 stdout. Exit code stays 0 regardless of converter presence."""
+    buf = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buf, encoding="cp1252", errors="strict"))
+    code = main(["--check"])
+    sys.stdout.flush()
+    assert code == EXIT_OK
+    # Something was written and it decodes as UTF-8 (the reconfigured stream).
+    assert b"dwg2pdf" in buf.getvalue()
