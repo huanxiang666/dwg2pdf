@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install LibreDWG tools (Linux, enables real DWG integration tests)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libredwg-tools
+          dwg2dxf --version || true
+
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -q -rs
+
+      - name: CLI smoke test
+        run: |
+          dwg2pdf --check
+          dwg2pdf tests/data/sample.dxf -o smoke-out -j 1 --layout modelspace
+          dwg2pdf --version

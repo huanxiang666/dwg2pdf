@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dwg2pdf"
+version = "0.1.0"
+description = "Batch DWG/DXF to PDF converter for Windows and Linux. DWG/DXF 图纸批量转 PDF 工具（CLI + GUI）。"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+keywords = ["dwg", "dxf", "pdf", "cad", "converter", "batch", "图纸转换"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Win32 (MS Windows)",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics :: Capture :: Computer Aided Design (CAD)",
+]
+dependencies = [
+    "ezdxf>=1.4,<2",
+    "pymupdf>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+dwg2pdf = "dwg2pdf.cli:main"
+dwg2pdf-gui = "dwg2pdf.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: tests that need an external DWG converter (dwg2dxf / ODA File Converter)",
+]
