@@ -49,6 +49,20 @@ dwg2pdf --check                           # environment diagnostics
 
 Exit codes: `0` all ok · `1` some failed · `2` usage error. Full flag table in the [Chinese README](README.md#参数一览).
 
+## Performance expectations (measured)
+
+Render cost scales with vector-path count. Reference on a 2020-class desktop (single core):
+
+| Drawing size | Time |
+|---|---|
+| Normal (< 5 MB DXF) | seconds |
+| Large (57 MB DXF, ~14k entities + ~5.7k inserts) | ~3 min for modelspace |
+| Same file, paperspace layout with 3 viewports | ~23 min (each viewport re-renders the full model) |
+
+- For big drawings prefer `--layout modelspace` — usually an order of magnitude faster than multi-viewport layout pages.
+- The CLI prints a `[heartbeat]` line every 30 s and the GUI shows live elapsed time — a long-running file is working, not hung.
+- An intermediate DXF above `--large-dxf-mb` (default 5) triggers a "large drawing" warning.
+
 ## Development
 
 ```bash
