@@ -25,10 +25,13 @@ classifiers = [
 dependencies = [
     "ezdxf>=1.4,<2",
     "pymupdf>=1.24",
+    # ezdxf's drawing frontend does `import PIL.Image` at module load; Pillow
+    # is not pulled in by ezdxf/pymupdf, so declare it explicitly.
+    "pillow>=10",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pypdf>=4"]
 
 [project.scripts]
 dwg2pdf = "dwg2pdf.cli:main"

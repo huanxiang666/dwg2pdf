@@ -18,11 +18,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install LibreDWG tools (Linux, enables real DWG integration tests)
+      - name: Install DWG converter (Linux, enables real DWG integration tests)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libredwg-tools
+          # libredwg-tools exists in some archives but not in every Ubuntu
+          # release; fall back to a source build of the pinned release.
+          sudo apt-get install -y libredwg-tools || {
+            echo "::warning::libredwg-tools not in apt archive, building LibreDWG 0.14 from source"
+            curl -fL --retry 3 -o /tmp/libredwg.tar.xz \
+              https://github.com/LibreDWG/libredwg/releases/download/0.14/libredwg-0.14.tar.xz
+            tar -xf /tmp/libredwg.tar.xz -C /tmp
+            cd /tmp/libredwg-0.14
+            ./configure --prefix="$HOME/.local" --disable-bindings --disable-shared CFLAGS="-O2 -w" > configure.log 2>&1 || { tail -20 configure.log; exit 1; }
+            make -j"$(nproc)" > make.log 2>&1 || { tail -30 make.log; exit 1; }
+            make install
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            "$HOME/.local/bin/dwg2dxf" --version
+          }
           dwg2dxf --version || true
 
       - name: Install package
