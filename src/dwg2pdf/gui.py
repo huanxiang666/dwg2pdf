@@ -331,6 +331,12 @@ class App:
         if self._running:
             if not self._tk_mods[3].askyesno("dwg2pdf", "正在转换中，确定要退出吗？"):
                 return
+            # A conversion is in flight on a daemon thread that owns a
+            # ProcessPoolExecutor. Its worker processes + the executor's atexit
+            # join would otherwise keep this (now windowless) process alive
+            # until the whole batch finished. User asked to abort → hard exit.
+            self.root.destroy()
+            os._exit(0)
         self.root.destroy()
 
 

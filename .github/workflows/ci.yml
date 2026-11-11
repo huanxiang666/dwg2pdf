@@ -4,9 +4,16 @@ on:
   push:
   pull_request:
 
+# Cancel superseded runs on the same ref; cap runtime so a hung LibreDWG build
+# or test can't burn minutes for hours.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -44,8 +51,14 @@ jobs:
       - name: Run tests
         run: python -m pytest -q -rs
 
+      # shell: bash (Git Bash on Windows) runs with `set -e` semantics, so a
+      # failing conversion cannot be masked by a later successful command —
+      # unlike the pwsh default, which ignores intermediate native exit codes.
       - name: CLI smoke test
+        shell: bash
         run: |
           dwg2pdf --check
-          dwg2pdf tests/data/sample.dxf -o smoke-out -j 1 --layout modelspace
           dwg2pdf --version
+          dwg2pdf tests/data/sample.dxf -o smoke-out -j 1 --layout modelspace
+          test -s smoke-out/sample.pdf
+          head -c 5 smoke-out/sample.pdf | grep -q "%PDF-"

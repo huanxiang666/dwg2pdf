@@ -74,7 +74,12 @@ def test_plan_targets_flat_dir_collision(tmp_path):
     plans = plan_targets([x / "same.dxf", y / "same.dxf"], output_dir=str(out))
     targets = {str(t).lower() for _, t in plans}
     assert len(targets) == 2
-    assert all(str(out) in t for t in targets)
+    # Lowercase both sides: on Windows the tmp path contains uppercase
+    # (C:\Users\...) while targets are lowercased here for the distinctness
+    # check — comparing a mixed-case needle to lowercase haystacks would
+    # falsely fail. Path handling itself is exercised by the conversion tests.
+    out_l = str(out).lower()
+    assert all(out_l in t for t in targets)
 
 
 def test_convert_one_ok_and_failed_and_skipped(tmp_path):

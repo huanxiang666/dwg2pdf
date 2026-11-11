@@ -17,8 +17,20 @@ from dwg2pdf.dwg_backend import (
     KIND_ODA,
     DwgConvertError,
     DwgConverter,
+    _infer_kind,
     convert_dwg_to_dxf,
     detect_converter,
+)
+
+# These tests fabricate a POSIX `#!/bin/sh` converter and either execute it or
+# rely on shutil.which() finding an extension-less file on PATH. Neither works
+# on Windows (CreateProcess rejects sh scripts: WinError 193; shutil.which only
+# tries PATHEXT extensions). Backend *logic* stays covered cross-platform by
+# test_infer_kind_* and the env-var/missing-binary tests below, and end-to-end
+# by the release-workflow frozen-exe smoke test on windows-latest.
+posix_script = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="fake POSIX sh converter cannot run / be found on PATH under Windows",
 )
 
 
@@ -45,6 +57,7 @@ def fake_dwg2dxf(tmp_path, monkeypatch):
     return bin_dir / "dwg2dxf"
 
 
+@posix_script
 def test_detect_libredwg_from_path(fake_dwg2dxf):
     converter = detect_converter()
     assert converter is not None
@@ -52,6 +65,7 @@ def test_detect_libredwg_from_path(fake_dwg2dxf):
     assert Path(converter.path).name == "dwg2dxf"
 
 
+@posix_script
 def test_detect_oda_from_path(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -71,6 +85,7 @@ def test_env_var_overrides_and_infers_kind(tmp_path, monkeypatch, fake_dwg2dxf):
     assert converter.path == str(fake_dwg2dxf)
 
 
+@posix_script
 def test_env_var_broken_falls_back_to_path(tmp_path, monkeypatch, fake_dwg2dxf):
     monkeypatch.setenv(ENV_CONVERTER, str(tmp_path / "does-not-exist"))
     converter = detect_converter()
@@ -78,6 +93,7 @@ def test_env_var_broken_falls_back_to_path(tmp_path, monkeypatch, fake_dwg2dxf):
     assert converter.kind == KIND_LIBREDWG
 
 
+@posix_script
 def test_convert_with_fake_libredwg(tmp_path, fake_dwg2dxf):
     dwg = tmp_path / "in.dwg"
     dwg.write_bytes(b"fake dwg")
@@ -88,6 +104,7 @@ def test_convert_with_fake_libredwg(tmp_path, fake_dwg2dxf):
     assert out.exists() and out.stat().st_size > 0
 
 
+@posix_script
 def test_convert_failure_includes_stderr(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -98,6 +115,7 @@ def test_convert_failure_includes_stderr(tmp_path, monkeypatch):
     assert "unsupported" in str(excinfo.value)
 
 
+@posix_script
 def test_convert_timeout(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -119,6 +137,34 @@ def test_oda_path_surfaces_error_when_binary_broken(tmp_path):
         convert_dwg_to_dxf(tmp_path / "x.dwg", tmp_path / "x.dxf", converter, timeout=10)
 
 
+def test_oda_converter_path_is_pushed_into_ezdxf_options(tmp_path, monkeypatch):
+    """Regression (blocking #4): DWG2PDF_CONVERTER / detected ODA path must be
+    written into ezdxf.options before odafc.convert runs, otherwise odafc
+    resolves its own executable from PATH and our forced path is ignored."""
+    import ezdxf
+    from ezdxf.addons import odafc
+
+    sentinel = str(tmp_path / "my-ODAFileConverter")
+    option_key = "win_exec_path" if sys.platform == "win32" else "unix_exec_path"
+    captured = {}
+
+    def fake_convert(source, dest="", **kwargs):
+        # Record what ezdxf.options points at the moment odafc would exec.
+        captured["option"] = ezdxf.options.get("odafc-addon", option_key)
+        Path(dest).write_bytes(b"0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n")
+
+    monkeypatch.setattr(odafc, "convert", fake_convert)
+    converter = DwgConverter(kind=KIND_ODA, path=sentinel)
+    convert_dwg_to_dxf(tmp_path / "in.dwg", tmp_path / "out.dxf", converter, timeout=10)
+    assert captured.get("option") == sentinel
+
+
+def test_infer_kind_is_substring_based(tmp_path):
+    """A user-named converter still routes correctly by basename substring."""
+    assert _infer_kind(str(tmp_path / "weird-dwg2dxf-wrapper")) == KIND_LIBREDWG
+    assert _infer_kind(str(tmp_path / "ODAFileConverter")) == KIND_ODA
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only fake scripts")
 def test_no_converter_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))  # empty dir only
@@ -127,3 +173,21 @@ def test_no_converter_returns_none(tmp_path, monkeypatch):
     # libredwg branch is gone.
     converter = detect_converter()
     assert converter is None or converter.kind == KIND_ODA
+
+
+# Pure string logic — runs identically on Windows and POSIX, so kind
+# inference stays covered even where the fake-script tests are skipped.
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/usr/bin/dwg2dxf", KIND_LIBREDWG),
+        ("C:\\Program Files\\LibreDWG\\dwg2dxf.exe", KIND_LIBREDWG),
+        ("/opt/oda/dwg2dxf", KIND_LIBREDWG),
+        ("C:\\Program Files\\ODA\\ODAFileConverter25.12\\ODAFileConverter.exe", KIND_ODA),
+        ("/usr/local/bin/ODAFileConverter", KIND_ODA),
+        # Unknown names default to the ODA directory-CLI convention.
+        ("/opt/custom/some-converter", KIND_ODA),
+    ],
+)
+def test_infer_kind(path, expected):
+    assert _infer_kind(path) == expected

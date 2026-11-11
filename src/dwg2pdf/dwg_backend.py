@@ -115,8 +115,13 @@ def detect_converter() -> DwgConverter | None:
         path = shutil.which(env) or (env if Path(env).is_file() else None)
         if path:
             return DwgConverter(kind=_infer_kind(path), path=str(path))
-        # Env var set but broken: fall through to auto-detection but keep the
-        # broken value out of the way.
+        # Env var set but points at nothing executable: warn (do not fail
+        # silently) then fall through to auto-detection.
+        print(
+            f"warning: {ENV_CONVERTER}={env!r} is not an executable file; "
+            "falling back to auto-detection",
+            file=sys.stderr,
+        )
     oda = _find_oda()
     if oda:
         return DwgConverter(kind=KIND_ODA, path=oda)
@@ -183,13 +188,35 @@ def _convert_with_libredwg(
 def _convert_with_oda(
     dwg_path: Path, out_dxf_path: Path, converter: DwgConverter, timeout: int
 ) -> Path:
-    # ezdxf's odafc add-on knows ODA's quirky directory-based CLI.
+    # ezdxf's odafc add-on knows ODA's quirky directory-based CLI, but it
+    # resolves the executable from ezdxf.options (odafc-addon win/unix_exec_path)
+    # or PATH — it does NOT take a path argument. So push our detected/forced
+    # converter.path into the options first, otherwise DWG2PDF_CONVERTER and our
+    # own auto-detection would be silently ignored for the ODA backend.
     try:
         from ezdxf.addons import odafc
     except Exception as exc:
         raise DwgConvertError(f"ezdxf odafc add-on unavailable: {exc}") from exc
+
+    option_key = "win_exec_path" if sys.platform == "win32" else "unix_exec_path"
+    try:
+        import ezdxf
+
+        ezdxf.options.set("odafc-addon", option_key, converter.path)
+    except Exception:
+        # Older/odd ezdxf option layouts: fall back to the module attribute the
+        # add-on also reads. Non-fatal — odafc will still try PATH.
+        try:
+            setattr(odafc, option_key, converter.path)
+        except Exception:
+            pass
+
     if out_dxf_path.exists():
         out_dxf_path.unlink()
+    # LIMIT: odafc.convert() exposes no timeout; a hung ODA process blocks this
+    # worker indefinitely (converter_timeout only guards the LibreDWG path).
+    # Upgrade: drive ODAFileConverter via subprocess directly with timeout= when
+    # users report ODA hangs — kept on odafc now for its correct dir-based CLI.
     try:
         odafc.convert(
             dwg_path,

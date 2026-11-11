@@ -179,13 +179,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.report:
         report_path = Path(args.report).expanduser()
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(
-            json.dumps(batch.to_report(opts), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        if not args.quiet:
-            print(f"report: {report_path.resolve()}")
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(
+                json.dumps(batch.to_report(opts), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            if not args.quiet:
+                print(f"report: {report_path.resolve()}")
+        except OSError as exc:
+            # A failed report must not change the conversion exit code (that
+            # would conflate "could not write report" with "a file failed").
+            print(f"warning: could not write report to {report_path}: {exc}", file=sys.stderr)
 
     ok, failed, skipped = len(batch.ok), len(batch.failed), len(batch.skipped)
     print(f"Done in {batch.total_seconds:.1f}s: {ok} ok, {failed} failed, {skipped} skipped.")

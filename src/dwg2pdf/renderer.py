@@ -364,9 +364,21 @@ def render_dxf_to_pdf(
 
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = pdf_path.with_name(f"{pdf_path.name}.part{os.getpid()}")
-        merged.save(str(tmp_path), garbage=3, deflate=True)
-        merged.close()
-        os.replace(tmp_path, pdf_path)
+        try:
+            merged.save(str(tmp_path), garbage=3, deflate=True)
+            merged.close()
+            os.replace(tmp_path, pdf_path)
+        except Exception:
+            # Don't leak the .partNNNN scratch file if save or the atomic
+            # replace fails (e.g. disk full, permission, path vanished).
+            if not merged.is_closed:
+                merged.close()
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+            raise
     except Exception:
         if not merged.is_closed:
             merged.close()

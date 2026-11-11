@@ -153,3 +153,4 @@ pyinstaller packaging/dwg2pdf.spec --noconfirm   # 产物在 dist/dwg2pdf/
 - 不解析 `.ctb/.stb` 打印样式文件；颜色按实体自身颜色（`--monochrome` 可全黑）。
 - ODA File Converter 在 Linux 上需要 Qt 运行库（发行版包一般自带）。
 - 光栅图像（IMAGE 实体）按显示策略嵌入，超大幅面图像会增大 PDF 体积。
+- `--converter-timeout` 只约束 LibreDWG `dwg2dxf`；ODA File Converter 的上游接口不提供超时参数，若 ODA 进程卡死会占住对应 worker（其余文件不受影响，可 `--jobs 1` 规避或改用 LibreDWG）。

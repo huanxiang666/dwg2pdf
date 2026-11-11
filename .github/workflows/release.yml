@@ -19,6 +19,7 @@ jobs:
           - os: ubuntu-22.04
             platform: linux-x64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -32,25 +33,35 @@ jobs:
       - name: Build bundle
         run: pyinstaller packaging/dwg2pdf.spec --noconfirm
 
+      # Smoke tests run under bash on both platforms (Git Bash on Windows) so
+      # `set -e` fails the step on any error — the pwsh default would ignore a
+      # failing native exe unless the last command failed. Two files with -j 2
+      # exercise the ProcessPoolExecutor spawn path in the frozen executable
+      # (the most fragile combination on Windows); run_batch's serial fallback
+      # keeps it green even if a worker can't spawn.
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
           dist/dwg2pdf/dwg2pdf --version
           dist/dwg2pdf/dwg2pdf --check
-          dist/dwg2pdf/dwg2pdf tests/data/sample.dxf -o /tmp/smoke -j 1 --layout modelspace
+          cp tests/data/sample.dxf /tmp/smoke2.dxf
+          dist/dwg2pdf/dwg2pdf tests/data/sample.dxf /tmp/smoke2.dxf -o /tmp/smoke -j 2 --layout modelspace
           test -s /tmp/smoke/sample.pdf
+          test -s /tmp/smoke/smoke2.pdf
           head -c 5 /tmp/smoke/sample.pdf | grep -q "%PDF-"
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          dist\dwg2pdf\dwg2pdf.exe --version
-          dist\dwg2pdf\dwg2pdf.exe --check
-          dist\dwg2pdf\dwg2pdf.exe tests\data\sample.dxf -o smoke-out -j 1 --layout modelspace
-          if (-not (Test-Path smoke-out\sample.pdf)) { throw "smoke pdf missing" }
-          $bytes = [System.IO.File]::ReadAllBytes("smoke-out\sample.pdf")[0..4]
-          if ([System.Text.Encoding]::ASCII.GetString($bytes) -ne "%PDF-") { throw "not a pdf" }
+          dist/dwg2pdf/dwg2pdf.exe --version
+          dist/dwg2pdf/dwg2pdf.exe --check
+          cp tests/data/sample.dxf smoke2.dxf
+          dist/dwg2pdf/dwg2pdf.exe tests/data/sample.dxf smoke2.dxf -o smoke-out -j 2 --layout modelspace
+          test -s smoke-out/sample.pdf
+          test -s smoke-out/smoke2.pdf
+          head -c 5 smoke-out/sample.pdf | grep -q "%PDF-"
 
       - name: Compute version
         id: ver
@@ -63,14 +74,19 @@ jobs:
             echo "version=${V}-dev" >> "$GITHUB_OUTPUT"
           fi
 
+      # Version/platform flow in through env, never string-spliced into the
+      # script body, so an unusual tag name can't inject shell.
       - name: Package artifacts
         shell: bash
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          RUNNER_OS_NAME: ${{ runner.os }}
         run: |
-          VER="${{ steps.ver.outputs.version }}"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            powershell -NoProfile -Command "Compress-Archive -Path dist/dwg2pdf -DestinationPath 'dwg2pdf-${VER}-${{ matrix.platform }}.zip'"
+          if [[ "$RUNNER_OS_NAME" == "Windows" ]]; then
+            powershell -NoProfile -Command 'Compress-Archive -Path dist/dwg2pdf -DestinationPath ("dwg2pdf-" + $env:VER + "-" + $env:PLATFORM + ".zip")'
           else
-            tar -czf "dwg2pdf-${VER}-${{ matrix.platform }}.tar.gz" -C dist dwg2pdf
+            tar -czf "dwg2pdf-${VER}-${PLATFORM}.tar.gz" -C dist dwg2pdf
           fi
           ls -la dwg2pdf-*
 
@@ -83,10 +99,13 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: dwg2pdf-
+          # glob is required: artifacts are dwg2pdf-windows-x64 / -linux-x64;
+          # a bare "dwg2pdf-" prefix matches nothing.
+          pattern: dwg2pdf-*
           merge-multiple: true
           path: artifacts
 

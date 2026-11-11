@@ -7,8 +7,10 @@ converted independently; one failure never aborts the batch.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -113,7 +115,10 @@ def collect_inputs(
     seen: set[str] = set()
 
     def add_file(p: Path) -> None:
-        key = str(p.resolve()).lower()
+        # normcase: case-insensitive dedup on Windows, case-preserving on
+        # POSIX — so Part.dxf and part.dxf stay distinct on Linux (a plain
+        # .lower() key would silently drop one of them there).
+        key = os.path.normcase(str(p.resolve()))
         if key in seen:
             return
         seen.add(key)
@@ -287,17 +292,23 @@ def run_batch(
                                 error=f"worker crashed: {exc.__class__.__name__}: {exc}",
                             )
                         )
-        except (OSError, NotImplementedError) as exc:
-            # Pool could not start at all (restricted environments): serial
-            # fallback so conversion still works, just slower.
+        except (OSError, NotImplementedError, BrokenProcessPool) as exc:
+            # The pool could not start (restricted env: OSError/
+            # NotImplementedError) or died mid-run (a worker was OOM-killed or
+            # segfaulted: BrokenProcessPool). Either way, fall back to serial
+            # for every file not yet reported so the batch still completes and
+            # the user gets results instead of a bare traceback.
             already = {r.source for r in batch.results}
             _worker_init(opts)
             for src, dst in plans:
                 if str(src) in already:
                     continue
                 report(convert_one(src, dst, opts))
-            if opts.verbose:
-                print(f"[warn] process pool unavailable ({exc}); ran serially")
+            print(
+                f"[warn] process pool unavailable ({exc.__class__.__name__}: {exc}); "
+                "finished the remaining files serially",
+                file=sys.stderr,
+            )
     batch.total_seconds = time.perf_counter() - t0
     # Keep input order in the report regardless of completion order.
     order = {str(src): i for i, (src, _) in enumerate(plans)}
