@@ -118,6 +118,12 @@ class ConvertOptions:
             block inserts) takes ~3 min for modelspace; a paperspace layout
             with several viewports re-renders the model per viewport and can
             take far longer (~23 min observed for 3 viewports).
+        chunk_threshold: layouts with at least this many entities use the
+            chunked render path (see renderer._render_layout_chunked). PyMuPDF's
+            backend commits the whole drawing through one shape, which is
+            superlinear: an 85k-record drawing ran >15 min unfinished while the
+            same geometry in 8k-record chunks finished in 123 s.
+        chunk_records: recorded commands per chunked-commit page.
         verbose: surface extra diagnostics in logs.
     """
 
@@ -133,6 +139,8 @@ class ConvertOptions:
     font_dirs: tuple[str, ...] = field(default=())
     converter_timeout: int = 600
     large_dxf_mb: float = 5.0
+    chunk_threshold: int = 20000
+    chunk_records: int = 8000
     verbose: bool = False
 
     def validate(self) -> ConvertOptions:
@@ -153,6 +161,10 @@ class ConvertOptions:
             raise OptionError(f"converter-timeout must be > 0, got {self.converter_timeout}")
         if self.large_dxf_mb <= 0:
             raise OptionError(f"large-dxf-mb must be > 0, got {self.large_dxf_mb}")
+        if self.chunk_threshold < 0:
+            raise OptionError(f"chunk-threshold must be >= 0, got {self.chunk_threshold}")
+        if self.chunk_records <= 0:
+            raise OptionError(f"chunk-records must be > 0, got {self.chunk_records}")
         return ConvertOptions(
             layout=layout,
             monochrome=bool(self.monochrome),
@@ -166,5 +178,7 @@ class ConvertOptions:
             font_dirs=tuple(str(p) for p in self.font_dirs),
             converter_timeout=int(self.converter_timeout),
             large_dxf_mb=float(self.large_dxf_mb),
+            chunk_threshold=int(self.chunk_threshold),
+            chunk_records=int(self.chunk_records),
             verbose=bool(self.verbose),
         )

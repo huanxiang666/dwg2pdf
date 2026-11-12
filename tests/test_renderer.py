@@ -222,3 +222,92 @@ def test_corrupt_sortentstable_dxf_renders(tmp_path):
     result = render_dxf_to_pdf(src, out, ConvertOptions(layout="modelspace"))
     assert result.pages == 1
     assert out.read_bytes()[:5] == b"%PDF-"
+
+
+# ------------------------------------------------------- chunked commit path
+# PyMuPdfRenderBackend commits the whole drawing through ONE shape, which is
+# superlinear in item count: an 85 364-record architectural drawing ran >15 min
+# without finishing, while the same geometry committed in 8 000-record chunks
+# finished in 123 s. Large layouts therefore render as several same-framed
+# pages. These tests pin the behaviour (frame identity + full geometry).
+
+def test_chunked_render_produces_pages_with_identical_frame(tmp_path):
+    from dwg2pdf.renderer import render_dxf_to_pdf
+
+    # A drawing comfortably above a forced-low threshold
+    src = tmp_path / "many.dxf"
+    doc = ezdxf.new("R2010", setup=True)
+    msp = doc.modelspace()
+    for i in range(60):
+        msp.add_line((i, 0), (i, 100), dxfattribs={"color": 2})
+    doc.saveas(str(src))
+
+    plain = tmp_path / "plain.pdf"
+    r_plain = render_dxf_to_pdf(src, plain, ConvertOptions(layout="modelspace"))
+    assert r_plain.pages == 1
+
+    chunked = tmp_path / "chunked.pdf"
+    r_chunked = render_dxf_to_pdf(
+        src, chunked,
+        ConvertOptions(layout="modelspace", chunk_threshold=1, chunk_records=10),
+    )
+    assert r_chunked.pages > 1, "low threshold must engage the chunked path"
+    assert any("chunked commit" in w for w in r_chunked.warnings)
+
+    import pymupdf as _pm
+
+    d = _pm.open(str(chunked))
+    try:
+        frames = {(round(p.rect.width, 1), round(p.rect.height, 1)) for p in d}
+        assert len(frames) == 1, f"all chunk pages must share one frame, got {frames}"
+        paths = sum(len(p.get_drawings()) for p in d)
+    finally:
+        d.close()
+    # geometry preserved: every line appears exactly once across the pages
+    assert paths >= 60, f"lost geometry: only {paths} paths for 60 lines"
+
+
+def test_chunked_render_geometry_matches_single_page(tmp_path):
+    """Union of the chunked pages must cover the same ink as the single page."""
+    import pymupdf as _pm
+
+    from dwg2pdf.renderer import render_dxf_to_pdf
+
+    src = tmp_path / "d.dxf"
+    doc = ezdxf.new("R2010", setup=True)
+    msp = doc.modelspace()
+    for i in range(40):
+        msp.add_circle((i * 10, 0), 4, dxfattribs={"color": 1})
+    doc.saveas(str(src))
+
+    one = tmp_path / "one.pdf"
+    render_dxf_to_pdf(src, one, ConvertOptions(layout="modelspace"))
+    many = tmp_path / "many.pdf"
+    render_dxf_to_pdf(src, many, ConvertOptions(
+        layout="modelspace", chunk_threshold=1, chunk_records=8))
+
+    def masks(path):
+        d = _pm.open(str(path))
+        try:
+            out = []
+            for p in d:
+                pix = p.get_pixmap(dpi=30)
+                import numpy as np
+                from PIL import Image
+                a = np.asarray(Image.frombytes("RGB", (pix.width, pix.height), pix.samples)).astype(int)
+                out.append(a.min(axis=2) < 245)
+            return out
+        finally:
+            d.close()
+
+    single = masks(one)[0]
+    union = masks(many)
+    if len(union) == 1:
+        u = union[0]
+    else:
+        u = union[0] | union[1]
+        for m in union[2:]:
+            u = u | m
+    assert single.shape == u.shape
+    iou = (single & u).sum() / max((single | u).sum(), 1)
+    assert iou > 0.6, f"chunked union diverges from single page (IoU={iou:.2f})"

@@ -7,6 +7,7 @@ all exported layouts into a single multi-page PDF per input file.
 
 from __future__ import annotations
 
+import copy
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -327,6 +328,56 @@ def _blank_page_for(opts: ConvertOptions) -> page_layout.Page:
     return _fallback_page(opts)
 
 
+def _entity_count(layout) -> int:
+    """Number of entities in a layout (cheap; drives the chunked path)."""
+    try:
+        return len(layout)
+    except Exception:
+        return 0
+
+
+def _render_layout_chunked(doc, layout, page, settings, config, chunk_size: int) -> list[bytes]:
+    """Render one layout as several same-framed pages, committing per chunk.
+
+    Why: PyMuPdfRenderBackend keeps ONE shape for the whole drawing and commits
+    it in ``finalize()``. For big drawings that single commit is superlinear —
+    measured on an 85 364-record / 1.54M-item architectural drawing: >15 min
+    unfinished, while the same geometry in 11 chunks of 8 000 records finished
+    in 123 s. Geometry is identical; only the commit size changes.
+
+    Every chunk shares one placement matrix computed from the FULL bounding
+    box, so all produced pages have the same frame and coordinate system.
+    Returns one PDF byte string per page.
+    """
+    from ezdxf.addons.drawing import pymupdf as _ep
+    from ezdxf.addons.drawing.recorder import Recorder
+
+    rec = Recorder()
+    Frontend(RenderContext(doc), rec, config=config).draw_layout(layout)
+    rec.finalize()
+    records = rec.records
+    total = len(records)
+    if total == 0:
+        return []
+
+    full = rec.player()
+    output_layout = page_layout.Layout(full.bbox(), flip_y=True)
+    final_page = output_layout.get_final_page(page, settings)
+    inner = copy.copy(settings)
+    inner.output_coordinate_space = _ep.get_coordinate_output_space(final_page)
+    matrix = output_layout.get_placement_matrix(final_page, settings=inner, top_origin=True)
+
+    pages: list[bytes] = []
+    for start in range(0, total, chunk_size):
+        player = rec.player()
+        player.records = records[start : start + chunk_size]
+        player.transform(matrix)
+        render_backend = _ep.PyMuPdfRenderBackend(final_page, inner)
+        player.replay(render_backend)
+        pages.append(render_backend.get_pdf_bytes())
+    return pages
+
+
 def render_dxf_to_pdf(
     dxf_path: Path | str,
     pdf_path: Path | str,
@@ -363,13 +414,43 @@ def render_dxf_to_pdf(
                 continue
             backend = PyMuPdfBackend()
             frontend = Frontend(RenderContext(doc), backend, config=config)
+            page, settings = _page_and_settings(layout, name == "Model", opts)
+
+            # Chunked path for big layouts: PyMuPdfRenderBackend commits the
+            # whole drawing through a single shape, which becomes superlinear
+            # (measured >15 min unfinished on 85k records vs 123 s chunked).
+            entity_count = _entity_count(layout)
+            if entity_count >= opts.chunk_threshold:
+                try:
+                    page_bytes_list = _render_layout_chunked(
+                        doc, layout, page, settings, config, opts.chunk_records
+                    )
+                except Exception as exc:
+                    raise RenderError(
+                        f"chunked rendering of layout {name!r} failed: "
+                        f"{exc.__class__.__name__}: {exc}"
+                    ) from exc
+                for pdf_bytes in page_bytes_list:
+                    part = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+                    try:
+                        merged.insert_pdf(part)
+                    finally:
+                        part.close()
+                result.pages += len(page_bytes_list)
+                result.layouts.append(name)
+                result.warnings.append(
+                    f"layout {name!r}: {entity_count} entities rendered in "
+                    f"{len(page_bytes_list)} same-frame page(s) to keep PDF "
+                    "generation fast (chunked commit)"
+                )
+                continue
+
             try:
                 frontend.draw_layout(layout)
             except Exception as exc:
                 raise RenderError(
                     f"rendering layout {name!r} failed: {exc.__class__.__name__}: {exc}"
                 ) from exc
-            page, settings = _page_and_settings(layout, name == "Model", opts)
             try:
                 pdf_bytes = backend.get_pdf_bytes(page, settings=settings)
             except ValueError as exc:

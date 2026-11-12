@@ -88,6 +88,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", default=None, help="write a JSON report of the batch run to this file")
     parser.add_argument("--converter-timeout", type=int, default=600, help="seconds allowed per external DWG conversion (default: 600)")
     parser.add_argument("--large-dxf-mb", type=float, default=5.0, help="warn when the intermediate DXF exceeds this size in MB (default: 5)")
+    parser.add_argument("--chunk-threshold", type=int, default=20000, help="layouts with at least this many entities use chunked PDF commits (default: 20000; 0 = always)")
+    parser.add_argument("--chunk-records", type=int, default=8000, help="recorded commands per chunked page (default: 8000)")
     parser.add_argument("--gui", action="store_true", help="launch the graphical interface")
     parser.add_argument("--check", action="store_true", help="print environment status (converters, libraries) and exit")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose progress output")
@@ -207,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
             font_dirs=tuple(args.font_dir),
             converter_timeout=args.converter_timeout,
             large_dxf_mb=args.large_dxf_mb,
+            chunk_threshold=args.chunk_threshold,
+            chunk_records=args.chunk_records,
             verbose=args.verbose,
         ).validate()
     except OptionError as exc:
