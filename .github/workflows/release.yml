@@ -167,12 +167,18 @@ jobs:
             echo "version=${V}-dev" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Install NSIS
+        shell: cmd
+        run: choco install nsis -y --no-progress
+
       - name: Build NSIS installer
         shell: cmd
         env:
           VER: ${{ steps.ver.outputs.version }}
         run: |
-          makensis /DVER=%VER% /DDIST=dist\dwg2pdf /DOUTFILE=dwg2pdf-%VER%-windows-x64-setup.exe packaging\installer.nsi
+          set "MAKENSIS=C:\Program Files (x86)\NSIS\makensis.exe"
+          if not exist "%MAKENSIS%" set "MAKENSIS=makensis"
+          "%MAKENSIS%" /DVER=%VER% /DDIST=dist\dwg2pdf /DOUTFILE=dwg2pdf-%VER%-windows-x64-setup.exe packaging\installer.nsi
 
       - name: Silent-install the built installer and verify
         shell: bash
