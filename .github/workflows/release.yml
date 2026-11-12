@@ -184,19 +184,23 @@ jobs:
           "%MAKENSIS%" /DVER=%VER% "/DDIST=%CD%\dist\dwg2pdf" "/DOUTFILE=%CD%\dwg2pdf-%VER%-windows-x64-setup.exe" "%CD%\packaging\installer.nsi"
 
       - name: Silent-install the built installer and verify
-        shell: bash
+        shell: cmd
         env:
           VER: ${{ steps.ver.outputs.version }}
         run: |
-          ./dwg2pdf-${VER}-windows-x64-setup.exe /S &
-          INSTALLER_PID=$!
-          for i in $(seq 1 60); do
-            [ -f "/c/Program Files/dwg2pdf/dwg2pdf.exe" ] && break
-            sleep 2
-          done
-          test -f "/c/Program Files/dwg2pdf/dwg2pdf.exe" || { echo "silent install failed"; exit 1; }
-          "/c/Program Files/dwg2pdf/dwg2pdf.exe" --version
-          "/c/Program Files/dwg2pdf/dwg2pdf-gui.exe" --help > /dev/null 2>&1 || true
+          rem Git Bash launches exes via CreateProcess, which refuses a
+          rem requireAdministrator manifest with ERROR_ELEVATION_REQUIRED (740)
+          rem — that silently killed the previous attempt. cmd's `start` goes
+          rem through ShellExecute, which elevates (runner token is full admin).
+          start /wait "" "dwg2pdf-%VER%-windows-x64-setup.exe" /S
+          echo installer exit code: %ERRORLEVEL%
+          if not exist "%ProgramFiles%\dwg2pdf\dwg2pdf.exe" (
+            echo silent install failed: %ProgramFiles%\dwg2pdf\dwg2pdf.exe missing
+            exit /b 1
+          )
+          "%ProgramFiles%\dwg2pdf\dwg2pdf.exe" --version
+          if errorlevel 1 exit /b 1
+          echo silent install OK
 
       - name: Package zip (+sha256)
         shell: bash
