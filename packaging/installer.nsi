@@ -1,4 +1,4 @@
-; NSIS installer for dwg2pdf (Windows x64)
+﻿; NSIS installer for dwg2pdf (Windows x64)
 ; Built on the GitHub windows runner:
 ;   makensis /DVER=x.y.z /DDIST=dist\dwg2pdf /DOUTFILE=dwg2pdf-x.y.z-windows-x64-setup.exe packaging\installer.nsi
 ; Silent install supported: installer.exe /S  (installs to $PROGRAMFILES64\dwg2pdf)
@@ -22,8 +22,8 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include MUI2.nsh
-!define MUI_ICON "${__FILEDIR__}\icon.ico"
-!define MUI_UNICON "${__FILEDIR__}\icon.ico"
+!define MUI_ICON "${__FILEDIR__}icon.ico"
+!define MUI_UNICON "${__FILEDIR__}icon.ico"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
