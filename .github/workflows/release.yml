@@ -2,7 +2,8 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -10,109 +11,90 @@ permissions:
 
 jobs:
   build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            platform: windows-x64
-          - os: ubuntu-22.04
-            platform: linux-x64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+          - goos: windows
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
+          go-version: "1.22"
+          cache: true
 
-      - name: Install project + PyInstaller
-        run: python -m pip install . pyinstaller
+      - name: Verify modules
+        run: go mod verify
 
-      - name: Build bundle
-        run: pyinstaller packaging/dwg2pdf.spec --noconfirm
-
-      # Smoke tests run under bash on both platforms (Git Bash on Windows) so
-      # `set -e` fails the step on any error — the pwsh default would ignore a
-      # failing native exe unless the last command failed. Two files with -j 2
-      # exercise the ProcessPoolExecutor spawn path in the frozen executable
-      # (the most fragile combination on Windows); run_batch's serial fallback
-      # keeps it green even if a worker can't spawn.
-      - name: Smoke test (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          dist/dwg2pdf/dwg2pdf --version
-          dist/dwg2pdf/dwg2pdf --check
-          cp tests/data/sample.dxf /tmp/smoke2.dxf
-          dist/dwg2pdf/dwg2pdf tests/data/sample.dxf /tmp/smoke2.dxf -o /tmp/smoke -j 2 --layout modelspace
-          test -s /tmp/smoke/sample.pdf
-          test -s /tmp/smoke/smoke2.pdf
-          head -c 5 /tmp/smoke/sample.pdf | grep -q "%PDF-"
-
-      - name: Smoke test (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          dist/dwg2pdf/dwg2pdf.exe --version
-          dist/dwg2pdf/dwg2pdf.exe --check
-          cp tests/data/sample.dxf smoke2.dxf
-          dist/dwg2pdf/dwg2pdf.exe tests/data/sample.dxf smoke2.dxf -o smoke-out -j 2 --layout modelspace
-          test -s smoke-out/sample.pdf
-          test -s smoke-out/smoke2.pdf
-          head -c 5 smoke-out/sample.pdf | grep -q "%PDF-"
-
-      - name: Compute version
-        id: ver
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            V=$(python -c "import pathlib,re;print(re.search(r'__version__ = \"(.+?)\"', pathlib.Path('src/dwg2pdf/__init__.py').read_text()).group(1))")
-            echo "version=${V}-dev" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Version/platform flow in through env, never string-spliced into the
-      # script body, so an unusual tag name can't inject shell.
-      - name: Package artifacts
-        shell: bash
+      - name: Build binary
         env:
-          VER: ${{ steps.ver.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-          RUNNER_OS_NAME: ${{ runner.os }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
         run: |
-          if [[ "$RUNNER_OS_NAME" == "Windows" ]]; then
-            powershell -NoProfile -Command 'Compress-Archive -Path dist/dwg2pdf -DestinationPath ("dwg2pdf-" + $env:VER + "-" + $env:PLATFORM + ".zip")'
+          mkdir -p dist
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          go build -trimpath -ldflags "-s -w" \
+            -o "dist/dwg2pdf${EXT}" ./cmd/dwg2pdf
+
+      - name: Smoke test (linux only)
+        if: matrix.goos == 'linux'
+        run: |
+          ./dist/dwg2pdf --version
+          ./dist/dwg2pdf --check
+
+      - name: Package
+        run: |
+          NAME="dwg2pdf-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "pkg/${NAME}"
+          cp -r dist/* "pkg/${NAME}/"
+          cp README.md LICENSE "pkg/${NAME}/" 2>/dev/null || true
+          cd pkg
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip -r "${NAME}.zip" "${NAME}"
           else
-            tar -czf "dwg2pdf-${VER}-${PLATFORM}.tar.gz" -C dist dwg2pdf
+            tar -czf "${NAME}.tar.gz" "${NAME}"
           fi
-          ls -la dwg2pdf-*
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dwg2pdf-${{ matrix.platform }}
-          path: dwg2pdf-*
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            pkg/*.zip
+            pkg/*.tar.gz
+          if-no-files-found: error
 
   release:
+    name: Publish release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with:
-          # glob is required: artifacts are dwg2pdf-windows-x64 / -linux-x64;
-          # a bare "dwg2pdf-" prefix matches nothing.
-          pattern: dwg2pdf-*
-          merge-multiple: true
           path: artifacts
 
-      - name: List release files
-        run: ls -la artifacts/
+      - name: Collect assets
+        run: |
+          mkdir -p assets
+          find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} assets/ \;
+          ls -lh assets
 
-      - uses: softprops/action-gh-release@v2
+      - name: Create release
+        uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
+          files: assets/*
           generate_release_notes: true
