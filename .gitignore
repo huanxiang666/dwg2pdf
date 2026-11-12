@@ -23,3 +23,4 @@ smoke-out/
 Thumbs.db
 .idea/
 .vscode/
+src/dwg2pdf/engine/

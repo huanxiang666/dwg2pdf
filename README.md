@@ -19,6 +19,11 @@ English: see [README_EN.md](README_EN.md)
 - **实用选项**：单色（黑白打印）、指定纸张（ISO A0–A4 / ANSI / ARCH / Letter / Legal）、缩放、页边距、跳过已存在的 PDF
 - **双界面**：命令行 + 图形界面（打包版内置，双击即用）
 - **诚实的失败处理**：JSON 批量报告、明确退出码；几何退化的文件输出空白页并给出显式 WARN，不静默吞掉
+- **开箱即用的中文字体**：内置 Apache-2.0 的 Droid Sans Fallback（覆盖简繁中文/日文/韩文）；引用字体缺失时自动替换（simsun/simhei/hztxt.shx/gbcbig.shx 等 30 个常见 CAD 字体名），系统里有真字体时绝不覆盖
+- **自带字体库导入**：`--font-dir`（可多次）或 GUI「字体库」添加自己的 SHX/TTF 目录，递归扫描
+- **质量/效率档位**：`--quality fast|balanced|high`（效率版/标准/质量版，控制曲线细分精度）
+- **大图多线程**：`--threads N` 并行分块渲染单张大图（实测 8 核机器 189s → 83s）
+- **安装包**：Linux `.deb`（内置 DWG 转换引擎，装完即用）；Windows NSIS 安装程序（开始菜单/卸载/静默安装 `/S`）；另提供免安装 zip/tar.gz
 - **真实语料验证**：以 LibreDWG 测试集 60 个真实 DWG 实测 100% 完成转换
 
 ## 下载安装
@@ -29,8 +34,13 @@ English: see [README_EN.md](README_EN.md)
 
 | 平台 | 文件 | 用法 |
 |---|---|---|
-| Windows x64 | `dwg2pdf-x.y.z-windows-x64.zip` | 解压后双击 `dwg2pdf-gui.exe`（图形界面）或用 `dwg2pdf.exe`（命令行） |
-| Linux x64 | `dwg2pdf-x.y.z-linux-x64.tar.gz` | 解压后运行 `dwg2pdf/dwg2pdf --gui`（图形界面）或 `dwg2pdf/dwg2pdf`（命令行） |
+| Windows x64 | `dwg2pdf-x.y.z-windows-x64-setup.exe` | **安装程序**：开始菜单快捷方式、可卸载、支持静默安装 `/S` |
+| Windows x64 | `dwg2pdf-x.y.z-windows-x64.zip` | 免安装绿色版：解压后双击 `dwg2pdf-gui.exe` 或用 `dwg2pdf.exe` |
+| Linux x64 | `dwg2pdf_x.y.z_amd64.deb` | **安装包**：`sudo apt install ./dwg2pdf_x.y.z_amd64.deb`，命令行直接 `dwg2pdf` / 应用菜单启动 GUI |
+| Linux x64 | `dwg2pdf-x.y.z-linux-x64.tar.gz` | 免安装版：解压后运行 `dwg2pdf/dwg2pdf` |
+| macOS arm64 | `dwg2pdf-x.y.z-macos-arm64-experimental.tar.gz` | 实验性构建（未内置 DWG 引擎，需自装 ODA/libredwg） |
+
+每个资产附带 `.sha256` 校验和。
 
 > Windows 包未做代码签名，首次运行 SmartScreen 提示时选择「仍要运行」。
 
@@ -42,9 +52,12 @@ dwg2pdf --check     # 环境自检
 dwg2pdf-gui         # 图形界面
 ```
 
-## DWG 支持：需要一个免费转换器
+## DWG 支持
 
-**DXF 文件开箱即用**。DWG 是 Autodesk 私有格式，本工具通过调用以下**任一**免费外部转换器完成 DWG → DXF（自动检测，也可用环境变量 `DWG2PDF_CONVERTER=/path/to/exe` 手动指定）：
+**Linux 的 .deb / tar.gz 已内置 LibreDWG 0.14 转换引擎，DWG 开箱即用。**
+Windows / macOS / pip 安装版需要一个免费外部转换器（自动检测，也可用 `DWG2PDF_CONVERTER=/path/to/exe` 指定）：
+
+**DXF 文件任何平台都开箱即用**。DWG 是 Autodesk 私有格式，需要以下**任一**转换器（Linux 发行包已内置 ②）：
 
 1. **ODA File Converter**（Open Design Alliance 官方免费工具，Windows / Linux / macOS）
    下载：<https://www.opendesign.com/guestfiles/oda_file_converter>，安装即可被自动识别。
@@ -96,6 +109,8 @@ dwg2pdf --check
 | `--skip-existing` | 目标 PDF 已存在则跳过 | 关 |
 | `--font-dir` | 追加字体目录（SHX/TTF），可重复 | — |
 | `--report` | 输出 JSON 批量报告 | — |
+| `--quality` | `fast`（效率版）/ `balanced`（标准）/ `high`（质量版） | `balanced` |
+| `--threads` | 单张大图分块渲染的并行线程数（0=自动；仅 `-j 1` 时生效） | `0` |
 | `--converter-timeout` | 单个 DWG 外部转换超时（秒） | `600` |
 
 **退出码**：`0` 全部成功；`1` 存在失败；`2` 用法错误。
@@ -107,6 +122,27 @@ dwg2pdf --check
 - **字体**：文字按 DXF 引用的字体渲染；系统缺少对应 SHX/TTF 时使用替代字体（笔画形状近似）。把 CAD 字体目录用 `--font-dir` 传入（或装到系统字体目录）可获得更高保真度。
 - **退化几何**：内容为空或坐标损坏（NaN）的布局输出空白页并在日志/报告中给出 WARN——文件本身的问题被如实暴露，而不是静默产出坏 PDF。
 - **3D**：以 2D 图纸（平面投影）方式渲染，与 CAD 的"打印"行为一致；不做 3D 视图投影。
+
+## 字体系统（v0.2.0）
+
+- **默认就能出中文**：安装包内置 Droid Sans Fallback Full（Apache-2.0，4MB，覆盖简繁中日韩）。图纸引用的字体在系统里不存在时，自动用它替换渲染——中文不再显示为方框（tofu）。
+- **30 个常见 CAD 字体名自动替换**：simsun/simhei/simkai/msyh/dengxian 等 TTF 名，hztxt.shx/gbcbig.shx/gbenor.shx/tssdeng.shx 等 SHX 大字体名。**系统或用户字体库里有真字体时永远优先用真字体**，替换只发生在缺失时。
+- **导入自己的字体库**：`--font-dir /path/to/fonts`（可重复），或 GUI「字体库 → 添加…」；目录递归扫描 TTF/OTF/TTC/SHX/SHP/LFF。把 CAD 安装目录的 Fonts 文件夹指过来即可获得与 CAD 一致的字体效果。
+- `dwg2pdf --check` 显示字体子系统状态（内置字体、注册的替换别名、可见字体数）。
+
+## 质量档位与加速（v0.2.0）
+
+| 档位 | 说明 | 适用 |
+|---|---|---|
+| `--quality fast` | 效率版：圆弧 36 段、粗平坦化，文件更小、渲染更快 | 快速预览、批量出图 |
+| `--quality balanced` | 标准（默认）：圆弧 128 段 | 日常交付 |
+| `--quality high` | 质量版：圆弧 512 段、精细平坦化 | 高精度归档、放大审阅 |
+
+**加速手段（真实有效）**：
+- `-j N`：多文件并行（不同文件同时转）
+- `--threads N`：单张大图的分块并行渲染——实测 8 核机器上 41k 实体建施图 **189s → 83s（2.3x）**，输出与串行完全一致（同页数/同画幅/同路径数）
+
+**关于 GPU 加速**：矢量 PDF 生成是 CPU 密集的 MuPDF 路径写入，整条管线没有可 GPU 化的环节，因此**不提供假的 GPU 开关**。`--check` 会如实报告检测到的 GPU 并注明其不参与渲染。需要更快请用上面的多核参数，或 `--quality fast`。
 
 ## 大图纸渲染：分块提交（v0.1.3）
 

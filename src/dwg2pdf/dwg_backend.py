@@ -104,10 +104,33 @@ def _find_oda() -> str | None:
     return None
 
 
+def bundled_dwg2dxf() -> str | None:
+    """Path to the dwg2dxf engine shipped INSIDE this installation, if any.
+
+    Linux release bundles carry a pinned LibreDWG dwg2dxf build under
+    ``dwg2pdf/engine/`` (populated by the release workflow, included by the
+    PyInstaller spec). Windows bundles currently rely on ODA File Converter
+    instead — no trustworthy prebuilt dwg2dxf.exe exists for Windows and a
+    fragile cross-build is worse than a documented free install.
+    """
+    exe = "dwg2dxf.exe" if sys.platform == "win32" else "dwg2dxf"
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "dwg2pdf" / "engine")
+    candidates.append(Path(__file__).resolve().parent / "engine")
+    for cand in candidates:
+        p = cand / exe
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+    return None
+
+
 def detect_converter() -> DwgConverter | None:
     """Detect the best available DWG converter, or None.
 
-    Order: ``DWG2PDF_CONVERTER`` env var, ODA File Converter, LibreDWG
+    Order: ``DWG2PDF_CONVERTER`` env var, ODA File Converter (highest
+    fidelity), the bundled dwg2dxf engine (Linux releases), then any
     ``dwg2dxf`` on PATH.
     """
     env = os.environ.get(ENV_CONVERTER, "").strip()
@@ -125,6 +148,9 @@ def detect_converter() -> DwgConverter | None:
     oda = _find_oda()
     if oda:
         return DwgConverter(kind=KIND_ODA, path=oda)
+    bundled = bundled_dwg2dxf()
+    if bundled:
+        return DwgConverter(kind=KIND_LIBREDWG, path=bundled)
     dwg2dxf = shutil.which("dwg2dxf")
     if dwg2dxf:
         return DwgConverter(kind=KIND_LIBREDWG, path=dwg2dxf)

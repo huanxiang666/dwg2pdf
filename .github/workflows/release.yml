@@ -9,16 +9,106 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform: windows-x64
-          - os: ubuntu-22.04
-            platform: linux-x64
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + PyInstaller
+        run: python -m pip install . pyinstaller
+
+      # Bundle the DWG engine: pinned LibreDWG build so .dwg works out of the
+      # box on Linux. Built on 22.04 (glibc 2.35) for wide distro compatibility.
+      - name: Build LibreDWG engine (bundled)
+        run: |
+          curl -fL --retry 3 -o /tmp/libredwg.tar.xz \
+            https://github.com/LibreDWG/libredwg/releases/download/0.14/libredwg-0.14.tar.xz
+          tar -xf /tmp/libredwg.tar.xz -C /tmp
+          cd /tmp/libredwg-0.14
+          ./configure --prefix="$RUNNER_TEMP/libredwg" --disable-bindings --disable-shared CFLAGS="-O2 -w" > configure.log 2>&1 || { tail -20 configure.log; exit 1; }
+          make -j"$(nproc)" > make.log 2>&1 || { tail -30 make.log; exit 1; }
+          make install
+          mkdir -p "$GITHUB_WORKSPACE/src/dwg2pdf/engine"
+          cp "$RUNNER_TEMP/libredwg/bin/dwg2dxf" "$GITHUB_WORKSPACE/src/dwg2pdf/engine/dwg2dxf"
+          chmod +x "$GITHUB_WORKSPACE/src/dwg2pdf/engine/dwg2dxf"
+          "$GITHUB_WORKSPACE/src/dwg2pdf/engine/dwg2dxf" --version
+
+      - name: Build bundle
+        run: pyinstaller packaging/dwg2pdf.spec --noconfirm
+
+      - name: Smoke test (frozen, bundled engine + CJK fonts)
+        shell: bash
+        run: |
+          BIN=dist/dwg2pdf/dwg2pdf
+          "$BIN" --version
+          "$BIN" --check | tee /tmp/check.txt
+          grep -q "LibreDWG dwg2dxf" /tmp/check.txt || { echo "bundled engine NOT detected"; exit 1; }
+          grep -q "bundled CJK font" /tmp/check.txt || { echo "bundled font missing"; exit 1; }
+          # Real DWG conversion through the BUNDLED engine (runner has no system dwg2dxf)
+          "$BIN" tests/data/sample.dwg -o /tmp/smoke -j 1
+          test -s /tmp/smoke/sample.pdf
+          head -c 5 /tmp/smoke/sample.pdf | grep -q "%PDF-"
+          # CJK substitution end-to-end: text style references a font that does
+          # not exist on this runner; the bundled Droid Sans Fallback must render it.
+          python - <<'PY'
+          import ezdxf
+          doc = ezdxf.new("R2010")
+          doc.styles.add("HZ", font="simsun.ttf")
+          doc.modelspace().add_text("中文渲染测试", height=20, dxfattribs={"style": "HZ"})
+          doc.saveas("/tmp/cjk.dxf")
+          PY
+          "$BIN" /tmp/cjk.dxf -o /tmp/smoke -j 1 --layout modelspace
+          python - <<'PY'
+          import pymupdf, numpy as np
+          from PIL import Image
+          d = pymupdf.open("/tmp/smoke/cjk.pdf")
+          pix = d[0].get_pixmap(dpi=72)
+          a = np.asarray(Image.frombytes("RGB", (pix.width, pix.height), pix.samples)).astype(int)
+          ink = float((a.min(axis=2) < 245).mean())
+          print(f"CJK ink coverage: {ink*100:.2f}%")
+          assert ink > 0.05, "CJK text rendered blank — bundled font substitution broken"
+          PY
+
+      - name: Compute version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            V=$(python -c "import pathlib,re;print(re.search(r'__version__ = \"(.+?)\"', pathlib.Path('src/dwg2pdf/__init__.py').read_text()).group(1))")
+            echo "version=${V}-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package tar.gz + .deb (+sha256)
+        shell: bash
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          tar -czf "dwg2pdf-${VER}-linux-x64.tar.gz" -C dist dwg2pdf
+          bash packaging/make_deb.sh "$VER" dist/dwg2pdf "dwg2pdf_${VER}_amd64.deb"
+          dpkg-deb -I "dwg2pdf_${VER}_amd64.deb" | head -20
+          # verify the .deb really works: extract and run the binary from it
+          rm -rf /tmp/deb-x && dpkg-deb -x "dwg2pdf_${VER}_amd64.deb" /tmp/deb-x
+          /tmp/deb-x/opt/dwg2pdf/dwg2pdf --version
+          sha256sum "dwg2pdf-${VER}-linux-x64.tar.gz" "dwg2pdf_${VER}_amd64.deb" > "dwg2pdf-${VER}-linux-x64.sha256"
+          ls -la dwg2pdf-*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dwg2pdf-linux-x64
+          path: |
+            dwg2pdf-*-linux-x64.tar.gz
+            dwg2pdf_*_amd64.deb
+            dwg2pdf-*-linux-x64.sha256
+
+  build-windows:
+    runs-on: windows-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -33,35 +123,38 @@ jobs:
       - name: Build bundle
         run: pyinstaller packaging/dwg2pdf.spec --noconfirm
 
-      # Smoke tests run under bash on both platforms (Git Bash on Windows) so
-      # `set -e` fails the step on any error — the pwsh default would ignore a
-      # failing native exe unless the last command failed. Two files with -j 2
-      # exercise the ProcessPoolExecutor spawn path in the frozen executable
-      # (the most fragile combination on Windows); run_batch's serial fallback
-      # keeps it green even if a worker can't spawn.
-      - name: Smoke test (Linux)
-        if: runner.os == 'Linux'
+      - name: Smoke test (frozen binary)
         shell: bash
         run: |
-          dist/dwg2pdf/dwg2pdf --version
-          dist/dwg2pdf/dwg2pdf --check
-          cp tests/data/sample.dxf /tmp/smoke2.dxf
-          dist/dwg2pdf/dwg2pdf tests/data/sample.dxf /tmp/smoke2.dxf -o /tmp/smoke -j 2 --layout modelspace
-          test -s /tmp/smoke/sample.pdf
-          test -s /tmp/smoke/smoke2.pdf
-          head -c 5 /tmp/smoke/sample.pdf | grep -q "%PDF-"
-
-      - name: Smoke test (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          dist/dwg2pdf/dwg2pdf.exe --version
-          dist/dwg2pdf/dwg2pdf.exe --check
+          BIN=dist/dwg2pdf/dwg2pdf.exe
+          "$BIN" --version
+          "$BIN" --check | tee check.txt
+          grep -q "bundled CJK font" check.txt || { echo "bundled font missing"; exit 1; }
           cp tests/data/sample.dxf smoke2.dxf
-          dist/dwg2pdf/dwg2pdf.exe tests/data/sample.dxf smoke2.dxf -o smoke-out -j 2 --layout modelspace
+          "$BIN" tests/data/sample.dxf smoke2.dxf -o smoke-out -j 2 --layout modelspace
           test -s smoke-out/sample.pdf
           test -s smoke-out/smoke2.pdf
           head -c 5 smoke-out/sample.pdf | grep -q "%PDF-"
+          # CJK substitution smoke (Windows runners lack simsun in some images;
+          # bundled Droid Sans Fallback must carry the glyphs)
+          python - <<'PY'
+          import ezdxf
+          doc = ezdxf.new("R2010")
+          doc.styles.add("HZ", font="simsun.ttf")
+          doc.modelspace().add_text("中文渲染测试", height=20, dxfattribs={"style": "HZ"})
+          doc.saveas("cjk.dxf")
+          PY
+          "$BIN" cjk.dxf -o smoke-out -j 1 --layout modelspace
+          python - <<'PY'
+          import pymupdf, numpy as np
+          from PIL import Image
+          d = pymupdf.open("smoke-out/cjk.pdf")
+          pix = d[0].get_pixmap(dpi=72)
+          a = np.asarray(Image.frombytes("RGB", (pix.width, pix.height), pix.samples)).astype(int)
+          ink = float((a.min(axis=2) < 245).mean())
+          print(f"CJK ink coverage: {ink*100:.2f}%")
+          assert ink > 0.05, "CJK text rendered blank — bundled font substitution broken"
+          PY
 
       - name: Compute version
         id: ver
@@ -74,37 +167,107 @@ jobs:
             echo "version=${V}-dev" >> "$GITHUB_OUTPUT"
           fi
 
-      # Version/platform flow in through env, never string-spliced into the
-      # script body, so an unusual tag name can't inject shell.
-      - name: Package artifacts
+      - name: Build NSIS installer
+        shell: cmd
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          makensis /DVER=%VER% /DDIST=dist\dwg2pdf /DOUTFILE=dwg2pdf-%VER%-windows-x64-setup.exe packaging\installer.nsi
+
+      - name: Silent-install the built installer and verify
         shell: bash
         env:
           VER: ${{ steps.ver.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-          RUNNER_OS_NAME: ${{ runner.os }}
         run: |
-          if [[ "$RUNNER_OS_NAME" == "Windows" ]]; then
-            powershell -NoProfile -Command 'Compress-Archive -Path dist/dwg2pdf -DestinationPath ("dwg2pdf-" + $env:VER + "-" + $env:PLATFORM + ".zip")'
-          else
-            tar -czf "dwg2pdf-${VER}-${PLATFORM}.tar.gz" -C dist dwg2pdf
-          fi
+          ./dwg2pdf-${VER}-windows-x64-setup.exe /S &
+          INSTALLER_PID=$!
+          for i in $(seq 1 60); do
+            [ -f "/c/Program Files/dwg2pdf/dwg2pdf.exe" ] && break
+            sleep 2
+          done
+          test -f "/c/Program Files/dwg2pdf/dwg2pdf.exe" || { echo "silent install failed"; exit 1; }
+          "/c/Program Files/dwg2pdf/dwg2pdf.exe" --version
+          "/c/Program Files/dwg2pdf/dwg2pdf-gui.exe" --help > /dev/null 2>&1 || true
+
+      - name: Package zip (+sha256)
+        shell: bash
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+          PLATFORM: windows-x64
+        run: |
+          powershell -NoProfile -Command 'Compress-Archive -Path dist/dwg2pdf -DestinationPath ("dwg2pdf-" + $env:VER + "-" + $env:PLATFORM + ".zip")'
+          sha256sum "dwg2pdf-${VER}-${PLATFORM}.zip" "dwg2pdf-${VER}-${PLATFORM}-setup.exe" > "dwg2pdf-${VER}-${PLATFORM}.sha256"
           ls -la dwg2pdf-*
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dwg2pdf-${{ matrix.platform }}
-          path: dwg2pdf-*
+          name: dwg2pdf-windows-x64
+          path: |
+            dwg2pdf-*-windows-x64.zip
+            dwg2pdf-*-windows-x64-setup.exe
+            dwg2pdf-*-windows-x64.sha256
+
+  build-macos:
+    # Experimental: arm64 portable bundle, no bundled DWG engine (install
+    # ODA File Converter or brew's libredwg for .dwg). continue-on-error so a
+    # mac toolchain hiccup never blocks Windows/Linux releases.
+    runs-on: macos-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + PyInstaller
+        run: python -m pip install . pyinstaller
+
+      - name: Build bundle
+        run: pyinstaller packaging/dwg2pdf.spec --noconfirm
+
+      - name: Smoke test
+        run: |
+          dist/dwg2pdf/dwg2pdf --version
+          dist/dwg2pdf/dwg2pdf --check
+          dist/dwg2pdf/dwg2pdf tests/data/sample.dxf -o /tmp/smoke -j 1 --layout modelspace
+          test -s /tmp/smoke/sample.pdf
+
+      - name: Compute version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            V=$(python -c "import pathlib,re;print(re.search(r'__version__ = \"(.+?)\"', pathlib.Path('src/dwg2pdf/__init__.py').read_text()).group(1))")
+            echo "version=${V}-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package tar.gz (+sha256)
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          tar -czf "dwg2pdf-${VER}-macos-arm64-experimental.tar.gz" -C dist dwg2pdf
+          shasum -a 256 "dwg2pdf-${VER}-macos-arm64-experimental.tar.gz" > "dwg2pdf-${VER}-macos-arm64.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dwg2pdf-macos-arm64
+          path: |
+            dwg2pdf-*-macos-arm64*
 
   release:
-    needs: build
+    # build-macos is continue-on-error: including it in `needs` makes the
+    # release WAIT for it (so its artifact isn't missed) without being
+    # blocked by its failure.
+    needs: [build-linux, build-windows, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/download-artifact@v4
         with:
-          # glob is required: artifacts are dwg2pdf-windows-x64 / -linux-x64;
-          # a bare "dwg2pdf-" prefix matches nothing.
           pattern: dwg2pdf-*
           merge-multiple: true
           path: artifacts

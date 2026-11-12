@@ -311,3 +311,24 @@ def test_chunked_render_geometry_matches_single_page(tmp_path):
     assert single.shape == u.shape
     iou = (single & u).sum() / max((single | u).sum(), 1)
     assert iou > 0.6, f"chunked union diverges from single page (IoU={iou:.2f})"
+
+
+# ------------------------------------------------------------ quality presets
+def test_quality_presets_map_to_config():
+    from dwg2pdf.renderer import _build_config
+
+    fast = _build_config(ConvertOptions(quality="fast"))
+    balanced = _build_config(ConvertOptions())
+    high = _build_config(ConvertOptions(quality="high"))
+    assert fast.circle_approximation_count == 36
+    assert balanced.circle_approximation_count == 128
+    assert high.circle_approximation_count == 512
+    assert high.max_flattening_distance < balanced.max_flattening_distance < fast.max_flattening_distance
+
+
+def test_quality_validation():
+    from dwg2pdf.options import OptionError
+
+    with pytest.raises(OptionError, match="quality"):
+        ConvertOptions(quality="ultra").validate()
+    assert ConvertOptions(quality="FAST").validate().quality == "fast"

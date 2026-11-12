@@ -82,7 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     fit_group = parser.add_mutually_exclusive_group()
     fit_group.add_argument("--fit", dest="fit", action="store_true", default=None, help="force fit-to-page")
     fit_group.add_argument("--no-fit", dest="fit", action="store_false", help="keep drawing scale (no fit-to-page)")
-    parser.add_argument("-j", "--jobs", type=int, default=0, help="parallel workers (default: CPU cores; 1 = serial)")
+    parser.add_argument("-j", "--jobs", type=int, default=0, help="parallel workers across FILES (default: CPU cores; 1 = serial)")
+    parser.add_argument("--threads", type=int, default=0, help="parallel workers for chunked rendering WITHIN one big drawing (default: 0 = auto; only active in serial/-j 1 mode)")
+    parser.add_argument("--quality", default="balanced", choices=["fast", "balanced", "high"], help="render preset: fast (效率版), balanced (default), high (质量版)")
     parser.add_argument("--skip-existing", action="store_true", help="skip files whose target PDF already exists")
     parser.add_argument("--font-dir", action="append", default=[], help="extra font directory (SHX/TTF), repeatable")
     parser.add_argument("--report", default=None, help="write a JSON report of the batch run to this file")
@@ -128,12 +130,70 @@ def run_check() -> int:
         print("DWG converter: not found")
         print(INSTALL_HINT)
     try:
+        from . import fonts as _fonts
+
+        info = _fonts.setup()
+        if info["bundled_font"]:
+            print(f"bundled CJK font: {info['bundled_font']}")
+            print(
+                f"  substitutes for {len(info['aliases_registered'])} common "
+                f"missing CAD fonts (simsun/hztxt/gbcbig/...): "
+                + (", ".join(info["aliases_registered"][:6]) + (" ..." if len(info["aliases_registered"]) > 6 else ""))
+            )
+        else:
+            print("bundled CJK font: MISSING from installation (Chinese text may not render)")
+        print(f"fonts visible to renderer: {info['font_count']}")
+    except Exception as exc:
+        print(f"font setup: FAILED ({exc.__class__.__name__}: {exc})")
+    try:
         import tkinter  # noqa: F401
 
         print("tkinter: OK (--gui available)")
     except Exception:
         print("tkinter: not available on this Python (--gui disabled; CLI unaffected)")
+    # GPU: detected and reported honestly. Vector PDF generation is CPU-bound
+    # MuPDF work — there is no GPU path in this pipeline, so no --gpu switch
+    # is offered (a toggle that changes nothing would be a lie). Multi-core
+    # acceleration is the real lever: -j (files) and --threads (chunks).
+    gpu = _detect_gpu()
+    if gpu:
+        print(f"GPU: {gpu}")
+        print("  note: vector PDF rendering is CPU-bound; the GPU is not used here.")
+        print("  speed up with -j (parallel files) and --threads (parallel chunks).")
+    else:
+        print("GPU: none detected (not required — rendering is CPU-bound)")
     return 0
+
+
+def _detect_gpu() -> str | None:
+    """Best-effort GPU name for diagnostics; None when not detectable."""
+    import shutil as _shutil
+    import subprocess as _sp
+
+    smi = _shutil.which("nvidia-smi")
+    if smi:
+        try:
+            proc = _sp.run(
+                [smi, "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=10,
+            )
+            names = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+            if names:
+                return ", ".join(names)
+        except Exception:
+            pass
+    if sys.platform == "win32":
+        try:
+            proc = _sp.run(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                capture_output=True, text=True, timeout=15,
+            )
+            names = [line.strip() for line in proc.stdout.splitlines()[1:] if line.strip()]
+            if names:
+                return ", ".join(names)
+        except Exception:
+            pass
+    return None
 
 
 def _print_progress(result, done: int, total: int, quiet: bool, verbose: bool) -> None:
@@ -170,6 +230,19 @@ def _heartbeat_loop(state: dict, stop: "threading.Event", interval: float = 30.0
             f"{elapsed:.0f}s elapsed — still rendering, large drawings "
             "can take minutes per file ..."
         )
+
+
+def _print_chunk_progress(name: str, done: int, total: int, quiet: bool) -> None:
+    """Single-line in-place chunk progress bar for big drawings."""
+    if quiet or total <= 0:
+        return
+    width = 24
+    filled = int(width * done / total)
+    bar = "#" * filled + "-" * (width - filled)
+    pct = 100.0 * done / total
+    print(f"\r  [{bar}] {pct:5.1f}%  chunks {done}/{total}  {name[:40]}", end="", flush=True)
+    if done >= total:
+        print("", flush=True)  # newline when the bar completes
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -211,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
             large_dxf_mb=args.large_dxf_mb,
             chunk_threshold=args.chunk_threshold,
             chunk_records=args.chunk_records,
+            threads=args.threads,
+            quality=args.quality,
             verbose=args.verbose,
         ).validate()
     except OptionError as exc:
@@ -250,7 +325,15 @@ def main(argv: list[str] | None = None) -> int:
         _print_progress(r, d, t, args.quiet, args.verbose)
 
     try:
-        batch = run_batch(plans, opts, progress_cb=_progress)
+        batch = run_batch(
+            plans,
+            opts,
+            progress_cb=_progress,
+            chunk_progress_cb=(
+                None if args.quiet
+                else lambda name, d, t: _print_chunk_progress(name, d, t, args.quiet)
+            ),
+        )
     finally:
         stop_hb.set()
 

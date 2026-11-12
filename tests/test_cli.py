@@ -71,6 +71,10 @@ def test_cli_check_runs(capsys):
     assert code == EXIT_OK
     assert "dwg2pdf" in captured.out
     assert "ezdxf" in captured.out
+    # Font subsystem must be reported (bundled CJK font ships with the package)
+    assert "bundled CJK font" in captured.out or "font setup" in captured.out
+    # GPU section must be present and honest (no fake acceleration claim)
+    assert "GPU:" in captured.out
 
 
 def test_cli_options_smoke(tmp_path, sample_dxf):

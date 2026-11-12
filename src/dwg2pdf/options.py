@@ -66,6 +66,18 @@ PAPER_CHOICES: tuple[str, ...] = (
 
 LAYOUT_CHOICES = ("auto", "modelspace", "all")
 
+#: Quality/efficiency presets. Each maps to ezdxf drawing Configuration
+#: overrides; "balanced" is the ezdxf default. Higher quality = more curve
+#: segments + finer flattening = bigger output and slower render; "fast"
+#: trades a little curve smoothness for a large speed/size win on drawings
+#: with many arcs/circles/splines.
+QUALITY_PRESETS: dict[str, dict] = {
+    "fast": {"circle_approximation_count": 36, "max_flattening_distance": 0.5},
+    "balanced": {"circle_approximation_count": 128, "max_flattening_distance": 0.01},
+    "high": {"circle_approximation_count": 512, "max_flattening_distance": 0.001},
+}
+QUALITY_CHOICES = ("fast", "balanced", "high")
+
 
 def resolve_paper(name: str) -> str:
     """Normalize a user paper name to a canonical ezdxf PAGE_SIZES key.
@@ -124,6 +136,13 @@ class ConvertOptions:
             superlinear: an 85k-record drawing ran >15 min unfinished while the
             same geometry in 8k-record chunks finished in 123 s.
         chunk_records: recorded commands per chunked-commit page.
+        threads: worker processes for chunked rendering of ONE big layout;
+            0 = auto (all cores when converting a single file, 1 when the
+            batch itself already runs files in parallel). Nested pools are
+            never created.
+        quality: render quality preset — "fast" (效率版), "balanced" (default),
+            "high" (质量版). Controls curve segment counts and flattening
+            tolerance; see QUALITY_PRESETS.
         verbose: surface extra diagnostics in logs.
     """
 
@@ -141,6 +160,8 @@ class ConvertOptions:
     large_dxf_mb: float = 5.0
     chunk_threshold: int = 20000
     chunk_records: int = 8000
+    threads: int = 0
+    quality: str = "balanced"
     verbose: bool = False
 
     def validate(self) -> ConvertOptions:
@@ -165,6 +186,13 @@ class ConvertOptions:
             raise OptionError(f"chunk-threshold must be >= 0, got {self.chunk_threshold}")
         if self.chunk_records <= 0:
             raise OptionError(f"chunk-records must be > 0, got {self.chunk_records}")
+        if self.threads < 0:
+            raise OptionError(f"threads must be >= 0, got {self.threads}")
+        quality = self.quality.strip().lower()
+        if quality not in QUALITY_CHOICES:
+            raise OptionError(
+                f"unknown quality {self.quality!r} (choose from: {', '.join(QUALITY_CHOICES)})"
+            )
         return ConvertOptions(
             layout=layout,
             monochrome=bool(self.monochrome),
@@ -180,5 +208,7 @@ class ConvertOptions:
             large_dxf_mb=float(self.large_dxf_mb),
             chunk_threshold=int(self.chunk_threshold),
             chunk_records=int(self.chunk_records),
+            threads=int(self.threads),
+            quality=quality,
             verbose=bool(self.verbose),
         )

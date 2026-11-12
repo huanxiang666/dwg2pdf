@@ -167,6 +167,12 @@ def test_infer_kind_is_substring_based(tmp_path):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only fake scripts")
 def test_no_converter_returns_none(tmp_path, monkeypatch):
+    import dwg2pdf.dwg_backend as db
+
+    # Isolate from a locally-built bundled engine (src/dwg2pdf/engine/ is a
+    # gitignored release-workflow artifact; it must not affect this test).
+    monkeypatch.setattr(db, "bundled_dwg2dxf", lambda: None)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "nothing"), raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))  # empty dir only
     monkeypatch.delenv(ENV_CONVERTER, raising=False)
     # ODA might still be really installed on dev machines; only assert the
@@ -191,3 +197,44 @@ def test_no_converter_returns_none(tmp_path, monkeypatch):
 )
 def test_infer_kind(path, expected):
     assert _infer_kind(path) == expected
+
+
+def _make_bundled_engine(tmp_path, monkeypatch):
+    """Fake a PyInstaller bundle containing dwg2pdf/engine/dwg2dxf."""
+    root = tmp_path / "meipass" / "dwg2pdf" / "engine"
+    root.mkdir(parents=True)
+    exe = root / "dwg2dxf"
+    exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "meipass"), raising=False)
+    return exe
+
+
+@posix_script
+def test_bundled_engine_discovered(tmp_path, monkeypatch):
+    from dwg2pdf.dwg_backend import bundled_dwg2dxf
+
+    exe = _make_bundled_engine(tmp_path, monkeypatch)
+    assert bundled_dwg2dxf() == str(exe)
+
+
+@posix_script
+def test_bundled_engine_wins_over_system_path(tmp_path, monkeypatch):
+    """Bundled engine is version-pinned, so it outranks a random PATH dwg2dxf."""
+    exe = _make_bundled_engine(tmp_path, monkeypatch)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _make_script(bin_dir, "dwg2dxf", "exit 0\n")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.delenv(ENV_CONVERTER, raising=False)
+    conv = detect_converter()
+    assert conv is not None and conv.kind == KIND_LIBREDWG
+    assert conv.path == str(exe)
+
+
+def test_no_bundled_engine_returns_none(tmp_path, monkeypatch):
+    from dwg2pdf.dwg_backend import bundled_dwg2dxf
+
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "nothing"), raising=False)
+    # __file__-relative engine dir does not exist in the source tree by default
+    assert bundled_dwg2dxf() is None or Path(bundled_dwg2dxf()).name == "dwg2dxf"

@@ -212,8 +212,18 @@ def _large_drawing_note(dxf_path: Path, opts: ConvertOptions) -> str | None:
     return None
 
 
-def convert_one(source: str | Path, target: str | Path, opts: ConvertOptions) -> FileResult:
-    """Convert a single file. Never raises — all failures become FileResult."""
+def convert_one(
+    source: str | Path,
+    target: str | Path,
+    opts: ConvertOptions,
+    progress=None,
+) -> FileResult:
+    """Convert a single file. Never raises — all failures become FileResult.
+
+    ``progress(done_chunks, total_chunks)`` is forwarded to the renderer for
+    chunk-level progress on big layouts (serial mode only; pool workers have
+    no channel back and chunk rendering there is forced serial anyway).
+    """
     source = Path(source)
     target = Path(target)
     started = time.perf_counter()
@@ -240,13 +250,13 @@ def convert_one(source: str | Path, target: str | Path, opts: ConvertOptions) ->
                 if note:
                     print(f"[warn] {source.name}: {note}", file=sys.stderr, flush=True)
                     result.warnings.append(note)
-                render = render_dxf_to_pdf(tmp_dxf, target, opts)
+                render = render_dxf_to_pdf(tmp_dxf, target, opts, progress=progress)
         else:
             note = _large_drawing_note(source, opts)
             if note:
                 print(f"[warn] {source.name}: {note}", file=sys.stderr, flush=True)
                 result.warnings.append(note)
-            render = render_dxf_to_pdf(source, target, opts)
+            render = render_dxf_to_pdf(source, target, opts, progress=progress)
 
         result.status = STATUS_OK
         result.pages = render.pages
@@ -275,8 +285,12 @@ def run_batch(
     plans: list[tuple[Path, Path]],
     opts: ConvertOptions,
     progress_cb=None,
+    chunk_progress_cb=None,
 ) -> BatchResult:
     """Convert all planned files; call ``progress_cb(FileResult, done, total)``.
+
+    ``chunk_progress_cb(source_name, done_chunks, total_chunks)`` (optional)
+    reports intra-file chunked-render progress in serial mode.
 
     Uses a process pool for >1 file (rendering is CPU-bound and PyMuPDF is not
     fork-friendly across threads). Falls back to serial execution when the pool
@@ -297,7 +311,10 @@ def run_batch(
     if jobs == 1:
         _worker_init(opts)
         for src, dst in plans:
-            report(convert_one(src, dst, opts))
+            chunk_cb = None
+            if chunk_progress_cb is not None:
+                chunk_cb = lambda done, total, _n=src.name: chunk_progress_cb(_n, done, total)
+            report(convert_one(src, dst, opts, progress=chunk_cb))
     else:
         try:
             with ProcessPoolExecutor(

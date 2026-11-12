@@ -40,6 +40,9 @@ dwg2pdf-gui = "dwg2pdf.gui:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+dwg2pdf = ["font_data/*.ttf", "font_data/*.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

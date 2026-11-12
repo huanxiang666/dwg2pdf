@@ -105,15 +105,21 @@ def require_pymupdf() -> None:
 
 
 def setup_font_dirs(font_dirs: tuple[str, ...] | list[str]) -> None:
-    """Register extra font directories (SHX/SHP/LFF/TTF) with ezdxf.
+    """Initialize the font subsystem for this process.
 
-    Must run in every worker process before the first render; ezdxf scans
-    ``options.support_dirs`` when its font manager is first built.
+    Rebuilds ezdxf's font manager over system dirs + the bundled CJK font +
+    user font dirs, and registers substitute aliases for common missing
+    Chinese CAD fonts (see dwg2pdf.fonts). Idempotent per-process.
     """
+    from . import fonts as _fonts
+
+    # Also keep ezdxf's own support_dirs updated for anything that consults
+    # the raw option (harmless duplication, cheap).
     for d in font_dirs or ():
         d = str(d)
         if d and d not in ezdxf.options.support_dirs:
             ezdxf.options.support_dirs.append(d)
+    _fonts.setup(tuple(str(d) for d in (font_dirs or ())))
 
 
 def list_layout_names(doc: ezdxf.document.Drawing) -> list[str]:
@@ -155,8 +161,11 @@ def select_layouts(doc: ezdxf.document.Drawing, mode: str) -> list[tuple[str, ob
 
 
 def _build_config(opts: ConvertOptions) -> Configuration:
-    """Render configuration: always white background (paper), optional mono."""
-    config = Configuration(background_policy=BackgroundPolicy.WHITE)
+    """Render configuration: white background, optional mono, quality preset."""
+    from .options import QUALITY_PRESETS
+
+    preset = QUALITY_PRESETS.get(opts.quality, {})
+    config = Configuration(background_policy=BackgroundPolicy.WHITE, **preset)
     if opts.monochrome:
         config = config.with_changes(color_policy=ColorPolicy.MONOCHROME)
     return config
@@ -336,7 +345,40 @@ def _entity_count(layout) -> int:
         return 0
 
 
-def _render_layout_chunked(doc, layout, page, settings, config, chunk_size: int) -> list[bytes]:
+def _replay_chunk(job: tuple) -> bytes:
+    """Render one recorded chunk to PDF bytes. Module-level so it is picklable.
+
+    job = (records, config, background, properties, matrix, final_page,
+    settings). All elements verified picklable, so this runs in a process-pool
+    worker: rebuild a Player over the record slice, apply the shared placement
+    matrix, replay into a fresh PyMuPDF backend.
+    """
+    from ezdxf.addons.drawing import pymupdf as _ep
+    from ezdxf.addons.drawing.recorder import Player
+
+    records, config, background, properties, matrix, final_page, settings = job
+    player = Player()
+    player.config = config
+    player.background = background
+    player.records = list(records)
+    player.properties = properties
+    player.has_shared_recordings = False
+    player.transform(matrix)
+    render_backend = _ep.PyMuPdfRenderBackend(final_page, settings)
+    player.replay(render_backend)
+    return render_backend.get_pdf_bytes()
+
+
+def _render_layout_chunked(
+    doc,
+    layout,
+    page,
+    settings,
+    config,
+    chunk_size: int,
+    workers: int = 1,
+    progress=None,
+) -> list[bytes]:
     """Render one layout as several same-framed pages, committing per chunk.
 
     Why: PyMuPdfRenderBackend keeps ONE shape for the whole drawing and commits
@@ -347,7 +389,11 @@ def _render_layout_chunked(doc, layout, page, settings, config, chunk_size: int)
 
     Every chunk shares one placement matrix computed from the FULL bounding
     box, so all produced pages have the same frame and coordinate system.
-    Returns one PDF byte string per page.
+
+    ``workers > 1`` renders chunks in a process pool — the real speed lever for
+    big drawings (vector PDF generation is CPU-bound MuPDF work; there is no
+    GPU path in this pipeline). Chunk order is preserved. ``progress(done,
+    total)`` is called in the parent process as chunks complete.
     """
     from ezdxf.addons.drawing import pymupdf as _ep
     from ezdxf.addons.drawing.recorder import Recorder
@@ -367,14 +413,58 @@ def _render_layout_chunked(doc, layout, page, settings, config, chunk_size: int)
     inner.output_coordinate_space = _ep.get_coordinate_output_space(final_page)
     matrix = output_layout.get_placement_matrix(final_page, settings=inner, top_origin=True)
 
-    pages: list[bytes] = []
-    for start in range(0, total, chunk_size):
-        player = rec.player()
-        player.records = records[start : start + chunk_size]
-        player.transform(matrix)
-        render_backend = _ep.PyMuPdfRenderBackend(final_page, inner)
-        player.replay(render_backend)
-        pages.append(render_backend.get_pdf_bytes())
+    slices = [records[start : start + chunk_size] for start in range(0, total, chunk_size)]
+    # Player state is rebuilt per worker from the recorder's own fields
+    # (config/background/properties) — mirrors Recorder.player().
+    rec_config = getattr(rec, "config", config)
+    rec_background = getattr(rec, "background", "#000000")
+    rec_properties = dict(getattr(rec, "properties", {}) or {})
+    jobs = [
+        (sl, rec_config, rec_background, rec_properties, matrix, final_page, inner)
+        for sl in slices
+    ]
+    n_chunks = len(jobs)
+
+    # Never nest process pools: batch workers already parallelise across files.
+    import multiprocessing as _mp
+
+    if _mp.parent_process() is not None:
+        workers = 1
+
+    def _report(done: int) -> None:
+        if progress is not None:
+            try:
+                progress(done, n_chunks)
+            except Exception:
+                pass  # progress display must never kill a render
+
+    if workers <= 1 or n_chunks == 1:
+        pages = []
+        for job in jobs:
+            pages.append(_replay_chunk(job))
+            _report(len(pages))
+        return pages
+
+    try:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        pages: list[bytes | None] = [None] * n_chunks
+        with ProcessPoolExecutor(max_workers=min(workers, n_chunks)) as pool:
+            futures = {pool.submit(_replay_chunk, job): i for i, job in enumerate(jobs)}
+            done = 0
+            for future in as_completed(futures):
+                pages[futures[future]] = future.result()
+                done += 1
+                _report(done)
+        if all(p is not None for p in pages):
+            return pages  # type: ignore[return-value]
+    except Exception:
+        # Any pool-level failure: rerun serially rather than losing the file.
+        pass
+    pages = []
+    for job in jobs:
+        pages.append(_replay_chunk(job))
+        _report(len(pages))
     return pages
 
 
@@ -382,8 +472,13 @@ def render_dxf_to_pdf(
     dxf_path: Path | str,
     pdf_path: Path | str,
     opts: ConvertOptions | None = None,
+    progress=None,
 ) -> RenderResult:
-    """Render one DXF file to a (multi-page) PDF. Raises RenderError."""
+    """Render one DXF file to a (multi-page) PDF. Raises RenderError.
+
+    ``progress(done_chunks, total_chunks)`` (optional) reports chunked-render
+    progress for big layouts — called from this process only.
+    """
     require_pymupdf()
     opts = (opts or ConvertOptions()).validate()
     dxf_path = Path(dxf_path)
@@ -421,9 +516,11 @@ def render_dxf_to_pdf(
             # (measured >15 min unfinished on 85k records vs 123 s chunked).
             entity_count = _entity_count(layout)
             if entity_count >= opts.chunk_threshold:
+                workers = opts.threads if opts.threads > 0 else (os.cpu_count() or 1)
                 try:
                     page_bytes_list = _render_layout_chunked(
-                        doc, layout, page, settings, config, opts.chunk_records
+                        doc, layout, page, settings, config, opts.chunk_records,
+                        workers=workers, progress=progress,
                     )
                 except Exception as exc:
                     raise RenderError(

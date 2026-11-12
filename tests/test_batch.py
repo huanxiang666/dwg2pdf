@@ -165,3 +165,18 @@ def test_batch_report_structure(tmp_path):
     assert report["totals"]["ok"] == 2
     assert len(report["results"]) == 2
     assert {"source", "target", "status", "pages"} <= set(report["results"][0])
+
+
+def test_chunk_progress_callback(tmp_path):
+    """Chunk-level progress must surface through convert_one(progress=...)."""
+    src = write_colored_dxf(tmp_path / "c.dxf")
+    seen = []
+    res = convert_one(
+        src, tmp_path / "c.pdf",
+        ConvertOptions(layout="modelspace", chunk_threshold=1, chunk_records=2),
+        progress=lambda d, t: seen.append((d, t)),
+    )
+    assert res.status == STATUS_OK
+    assert seen, "no chunk progress reported"
+    assert seen[-1][0] == seen[-1][1], "final progress must reach total"
+    assert [d for d, _ in seen] == sorted(d for d, _ in seen), "monotonic progress"

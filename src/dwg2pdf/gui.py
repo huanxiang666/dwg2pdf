@@ -23,6 +23,8 @@ from .options import PAPER_CHOICES, ConvertOptions, OptionError
 
 _LAYOUT_CHOICES = ["auto — 图纸布局优先", "modelspace — 模型空间", "all — 全部布局"]
 _LAYOUT_VALUES = ["auto", "modelspace", "all"]
+_QUALITY_CHOICES = ["fast — 效率版", "balanced — 标准（默认）", "high — 质量版"]
+_QUALITY_VALUES = ["fast", "balanced", "high"]
 _PAPER_CHOICES_CN = ["auto — 自动/图纸原尺寸"] + list(PAPER_CHOICES[1:])
 _POLL_MS = 100
 
@@ -44,6 +46,7 @@ class App:
         self.files: list[str] = []
         self.q: "queue.Queue[tuple]" = queue.Queue()
         self._running = False
+        self._chunk_note = ""
         self._last_output_dir: str | None = None
 
         tk_, ttk_ = tk, ttk
@@ -106,6 +109,21 @@ class App:
                      textvariable=self.jobs_var, width=4).pack(side="left")
         self.skip_var = tk_.BooleanVar(value=False)
         ttk_.Checkbutton(row2, text="跳过已存在的 PDF", variable=self.skip_var).pack(side="left", padx=(12, 0))
+
+        row3 = ttk_.Frame(opts)
+        row3.pack(fill="x", pady=(6, 0))
+        ttk_.Label(row3, text="质量:").pack(side="left")
+        self.quality_var = tk_.StringVar(value=_QUALITY_CHOICES[1])
+        ttk_.Combobox(row3, textvariable=self.quality_var, values=_QUALITY_CHOICES,
+                      state="readonly", width=16).pack(side="left", padx=(4, 12))
+        ttk_.Label(row3, text="大图线程:").pack(side="left")
+        self.threads_var = tk_.IntVar(value=0)
+        ttk_.Spinbox(row3, from_=0, to=max(16, (os.cpu_count() or 4) * 2),
+                     textvariable=self.threads_var, width=4).pack(side="left", padx=(4, 12))
+        ttk_.Label(row3, text="字体库:").pack(side="left")
+        self.font_dirs_var = tk_.StringVar(value="")
+        ttk_.Entry(row3, textvariable=self.font_dirs_var, width=30).pack(side="left", padx=4, fill="x", expand=True)
+        ttk_.Button(row3, text="添加…", command=self.add_font_dir).pack(side="left")
 
         # --- progress + log --------------------------------------------------
         prog_frame = ttk_.Frame(self.root, padding=(10, 4))
@@ -189,16 +207,33 @@ class App:
             self.output_dir_var.set(folder)
             self.output_mode_var.set("custom")
 
+    def add_font_dir(self) -> None:
+        """Append a user font library dir (TTF/OTF/SHX/SHP/LFF, 递归扫描)."""
+        filedialog = self._tk_mods[2]
+        folder = filedialog.askdirectory(title="选择字体库目录（含 SHX/TTF 等 CAD 字体）")
+        if not folder:
+            return
+        current = [d.strip() for d in self.font_dirs_var.get().split(os.pathsep) if d.strip()]
+        if folder not in current:
+            current.append(folder)
+        self.font_dirs_var.set(os.pathsep.join(current))
+        self._log(f"已添加字体库: {folder}")
+
     # ---------------------------------------------------------------- convert
     def _build_opts(self) -> ConvertOptions:
         layout_idx = _LAYOUT_CHOICES.index(self.layout_var.get())
         layout = _LAYOUT_VALUES[layout_idx]
+        quality_idx = _QUALITY_CHOICES.index(self.quality_var.get())
+        quality = _QUALITY_VALUES[quality_idx]
         paper = self.paper_var.get().split(" — ")[0].strip()
         output_dir = None
         if self.output_mode_var.get() == "custom":
             output_dir = self.output_dir_var.get().strip()
             if not output_dir:
                 raise OptionError("已选择“指定目录”，但未填写目录")
+        font_dirs = tuple(
+            d.strip() for d in self.font_dirs_var.get().split(os.pathsep) if d.strip()
+        )
         return ConvertOptions(
             layout=layout,
             monochrome=self.mono_var.get(),
@@ -206,6 +241,9 @@ class App:
             jobs=self.jobs_var.get(),
             output_dir=output_dir,
             skip_existing=self.skip_var.get(),
+            font_dirs=font_dirs,
+            threads=self.threads_var.get(),
+            quality=quality,
         ).validate()
 
     def start_convert(self) -> None:
@@ -237,7 +275,10 @@ class App:
             def progress_cb(result, done: int, total: int) -> None:
                 self.q.put(("progress", result, done, total))
 
-            batch = run_batch(plans, opts, progress_cb=progress_cb)
+            def chunk_cb(name: str, done: int, total: int) -> None:
+                self.q.put(("chunk", name, done, total))
+
+            batch = run_batch(plans, opts, progress_cb=progress_cb, chunk_progress_cb=chunk_cb)
             self.q.put(("done", batch))
         except Exception as exc:  # surface any unexpected crash to the UI
             self.q.put(("error", f"{exc.__class__.__name__}: {exc}"))
@@ -299,13 +340,15 @@ class App:
                 total = int(float(self.progress["maximum"] or 0))
             except (ValueError, TypeError):
                 done, total = 0, 0
-            self.status_var.set(f"转换中… {done}/{total}，已用时 {elapsed:.0f}s")
+            chunk = getattr(self, "_chunk_note", "")
+            self.status_var.set(f"转换中… {done}/{total}{chunk}，已用时 {elapsed:.0f}s")
         try:
             while True:
                 msg = self.q.get_nowait()
                 kind = msg[0]
                 if kind == "progress":
                     _, result, done, total = msg
+                    self._chunk_note = ""
                     self.progress.configure(value=done)
                     self.status_var.set(f"{done} / {total}")
                     if result.status == "ok":
@@ -317,6 +360,9 @@ class App:
                     else:
                         first = result.error.splitlines()[0] if result.error else "未知错误"
                         self._log(f"✘ {Path(result.source).name}: {first}")
+                elif kind == "chunk":
+                    _, name, c_done, c_total = msg
+                    self._chunk_note = f"（{Path(name).name} 分块 {c_done}/{c_total}）"
                 elif kind == "done":
                     batch = msg[1]
                     self._running = False

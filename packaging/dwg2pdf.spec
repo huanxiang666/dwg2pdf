@@ -18,6 +18,17 @@ for _pkg in ("ezdxf", "pymupdf"):
     binaries += _b
     hiddenimports += _h
 
+# Bundled CJK font (always present in the source tree).
+_font_dir = os.path.join(SPECPATH, os.pardir, "src", "dwg2pdf", "font_data")
+if os.path.isdir(_font_dir):
+    datas.append((_font_dir, os.path.join("dwg2pdf", "font_data")))
+
+# Bundled DWG engine: populated by the Linux release job (LibreDWG build);
+# absent elsewhere — detection then falls back to ODA / system dwg2dxf.
+_engine_dir = os.path.join(SPECPATH, os.pardir, "src", "dwg2pdf", "engine")
+if os.path.isdir(_engine_dir) and os.listdir(_engine_dir):
+    datas.append((_engine_dir, os.path.join("dwg2pdf", "engine")))
+
 _icon_path = os.path.join(SPECPATH, "icon.ico")
 icon = _icon_path if os.path.exists(_icon_path) else None
 

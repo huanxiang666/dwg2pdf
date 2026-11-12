@@ -36,6 +36,13 @@ pip install git+https://github.com/huanxiang666/dwg2pdf.git
 
 Run `dwg2pdf --check` to verify your environment.
 
+## v0.2.0 highlights
+
+- **Installers**: Windows NSIS setup (.exe, silent `/S` supported), Linux `.deb` (bundles the LibreDWG DWG engine — DWG works out of the box), plus portable zip/tar.gz and an experimental macOS arm64 build. All assets ship with sha256 checksums.
+- **Fonts that just work**: bundled Apache-2.0 CJK font substitutes ~30 common missing CAD font names (simsun, hztxt.shx, gbcbig.shx, ...); real fonts always win. Import your own font libraries via `--font-dir` (TTF/SHX/SHP/LFF, recursive).
+- **Quality presets**: `--quality fast|balanced|high` (curve fidelity vs speed/size).
+- **Real multithreading**: `-j N` across files, `--threads N` for chunk-parallel rendering of one big drawing (measured 189s → 83s on 8 cores, byte-identical geometry). No fake GPU switch: vector PDF generation is CPU-bound; `--check` reports this honestly.
+
 ## Usage
 
 ```bash
