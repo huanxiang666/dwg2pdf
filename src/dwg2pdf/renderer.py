@@ -39,6 +39,52 @@ class RenderError(RuntimeError):
     """A DXF file could not be rendered to PDF."""
 
 
+def _install_lenient_sortentstable() -> None:
+    """Tolerate corrupted SORTENTSTABLE objects written by LibreDWG.
+
+    Observed on a real r2007 architectural DWG (5.3 MB, 41k entities):
+    dwg2dxf emitted a 36733-entry SORTENTSTABLE where one ``331 <handle>``
+    entry lost its paired ``5 <sort-handle>``, shifting every following pair.
+    ezdxf raises a fatal DXFStructureError on that — and recover.readfile()
+    propagates it too, because it happens during entity binding, not tag
+    recovery. SORTENTSTABLE only stores AutoCAD's draw-order bookkeeping and
+    is irrelevant for rendering, so we load it leniently: keep well-formed
+    (331, 5) pairs, skip anything else. Idempotent; a no-op if ezdxf's
+    internals change shape.
+    """
+    try:
+        from ezdxf.entities import dxfobj
+
+        cls = dxfobj.SortEntsTable
+        if getattr(cls.load_table, "_dwg2pdf_lenient", False):
+            return
+
+        def load_table(self, tags):  # noqa: ANN001 - mirrors ezdxf signature
+            table: dict[str, str] = {}
+            i, n = 0, len(tags)
+            while i < n:
+                handle = tags[i]
+                if handle.code != 331:
+                    i += 1
+                    continue
+                if i + 1 < n and tags[i + 1].code == 5:
+                    table[handle.value] = tags[i + 1].value
+                    i += 2
+                else:
+                    # Corrupted pair: drop this 331 and resync at the next tag.
+                    i += 1
+            self.table = table
+
+        load_table._dwg2pdf_lenient = True  # type: ignore[attr-defined]
+        cls.load_table = load_table
+    except Exception:
+        # Never let the hardening break the import; strict behaviour remains.
+        pass
+
+
+_install_lenient_sortentstable()
+
+
 @dataclass
 class RenderResult:
     """Outcome of rendering one DXF file."""

@@ -130,3 +130,95 @@ def test_select_layouts_lists_available_names_in_error(tmp_path, sample_dxf):
     with pytest.raises(RenderError) as excinfo:
         select_layouts(doc, "Missing")
     assert "Model" in str(excinfo.value)
+
+
+# ------------------------------------------------- corrupt SORTENTSTABLE
+# Regression from a real file: LibreDWG dwg2dxf output of a 5.3 MB r2007
+# architectural DWG ("(3审)建施_9#楼_J00~J18_t3(1).dwg") contained a
+# SORTENTSTABLE whose entry #769 lost its sort-handle (331 followed by 331),
+# misaligning all 36k following pairs. ezdxf raised a fatal DXFStructureError
+# on it — recover.readfile() too, since the failure happens during entity
+# binding. SORTENTSTABLE is pure draw-order bookkeeping; rendering must not
+# die on it.
+
+_CORRUPT_SORTENTS_LINES = [
+    "  0", "SORTENTSTABLE",
+    "  5", "FFFFF001",
+    "100", "AcDbSortentsTable",
+    "331", "AAAA",
+    "331", "BBBB",   # corrupt: missing the "5" sort-handle after AAAA
+    "  5", "CCCC",
+]
+
+
+def _inject_corrupt_sortentstable(dxf_path) -> None:
+    raw = dxf_path.read_bytes().decode("utf-8", errors="surrogateescape")
+    lines = raw.splitlines()
+    # locate OBJECTS section, then its ENDSEC; insert before the "  0" that
+    # precedes ENDSEC
+    obj_start = None
+    for i in range(len(lines) - 1):
+        if lines[i].strip() == "2" and lines[i + 1].strip() == "OBJECTS":
+            obj_start = i
+            break
+    assert obj_start is not None, "generated DXF has no OBJECTS section"
+    end_idx = next(j for j in range(obj_start, len(lines)) if lines[j].strip() == "ENDSEC")
+    assert lines[end_idx - 1].strip() == "0"
+    new_lines = lines[: end_idx - 1] + _CORRUPT_SORTENTS_LINES + lines[end_idx - 1:]
+    dxf_path.write_bytes(
+        ("\r\n".join(new_lines) + "\r\n").encode("utf-8", errors="surrogateescape")
+    )
+
+
+def test_lenient_sortentstable_skips_corrupt_pairs():
+    from ezdxf.entities.dxfobj import SortEntsTable
+    from ezdxf.lldxf.tags import Tags
+    from ezdxf.lldxf.types import DXFTag
+
+    obj = SortEntsTable()
+    tags = Tags([
+        DXFTag(331, "A"), DXFTag(5, "SA"),   # well-formed
+        DXFTag(331, "B"),                    # corrupt: sort handle missing
+        DXFTag(331, "C"), DXFTag(5, "SC"),   # must resync here
+    ])
+    obj.load_table(tags)  # must not raise
+    assert obj.table == {"A": "SA", "C": "SC"}
+
+
+def test_corrupt_sortentstable_dxf_renders(tmp_path):
+    from ezdxf.entities import dxfobj
+
+    from dwg2pdf.renderer import render_dxf_to_pdf
+
+    src = tmp_path / "corrupt-sortents.dxf"
+    doc = ezdxf.new("R2010", setup=True)
+    doc.modelspace().add_line((0, 0), (100, 50), dxfattribs={"color": 1})
+    doc.saveas(str(src))
+    _inject_corrupt_sortentstable(src)
+
+    patched = dxfobj.SortEntsTable.load_table
+    assert getattr(patched, "_dwg2pdf_lenient", False), "lenient loader not installed"
+
+    # Red control: ezdxf's original strict logic must reject this exact file —
+    # proves the fixture really carries the corruption (mutation-safe test).
+    def strict_load_table(self, tags):
+        for handle, sort_handle in dxfobj.take2(tags):
+            if handle.code != 331:
+                raise ezdxf.DXFStructureError(
+                    f"Invalid handle code {handle.code}, expected 331")
+            if sort_handle.code != 5:
+                raise ezdxf.DXFStructureError(
+                    f"Invalid sort handle code {handle.code}, expected 5")
+            self.table[handle.value] = sort_handle.value
+
+    try:
+        dxfobj.SortEntsTable.load_table = strict_load_table
+        with pytest.raises(ezdxf.DXFStructureError, match="sort handle"):
+            ezdxf.readfile(str(src))
+    finally:
+        dxfobj.SortEntsTable.load_table = patched
+
+    out = tmp_path / "out.pdf"
+    result = render_dxf_to_pdf(src, out, ConvertOptions(layout="modelspace"))
+    assert result.pages == 1
+    assert out.read_bytes()[:5] == b"%PDF-"

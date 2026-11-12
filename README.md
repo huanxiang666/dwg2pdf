@@ -168,3 +168,4 @@ pyinstaller packaging/dwg2pdf.spec --noconfirm   # 产物在 dist/dwg2pdf/
 - ODA File Converter 在 Linux 上需要 Qt 运行库（发行版包一般自带）。
 - 光栅图像（IMAGE 实体）按显示策略嵌入，超大幅面图像会增大 PDF 体积。
 - `--converter-timeout` 只约束 LibreDWG `dwg2dxf`；ODA File Converter 的上游接口不提供超时参数，若 ODA 进程卡死会占住对应 worker（其余文件不受影响，可 `--jobs 1` 规避或改用 LibreDWG）。
+- LibreDWG 偶尔会写出损坏的 `SORTENTSTABLE` 对象（实测某 5.3MB r2007 建施图：36733 个条目中缺一个排序句柄，ezdxf 严格/容错读取都会致命报错）。dwg2pdf 已内置宽容加载器自动跳过损坏条目——该对象只是 AutoCAD 绘制顺序的记录，不影响渲染内容。
