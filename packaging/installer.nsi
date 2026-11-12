@@ -22,8 +22,19 @@ RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
 !include MUI2.nsh
-!define MUI_ICON "${__FILEDIR__}icon.ico"
-!define MUI_UNICON "${__FILEDIR__}icon.ico"
+; Icon paths resolve relative to the SCRIPT dir in NSIS 3.13 when invoked
+; with a relative path, and __FILEDIR__ semantics vary — guard with
+; /FILEEXISTS so a path quirk degrades to the default icon instead of
+; aborting the whole build. CI invokes makensis with absolute paths.
+!if /FILEEXISTS "${__FILEDIR__}\icon.ico"
+  !define MUI_ICON "${__FILEDIR__}\icon.ico"
+  !define MUI_UNICON "${__FILEDIR__}\icon.ico"
+!else
+  !if /FILEEXISTS "${__FILEDIR__}icon.ico"
+    !define MUI_ICON "${__FILEDIR__}icon.ico"
+    !define MUI_UNICON "${__FILEDIR__}icon.ico"
+  !endif
+!endif
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY

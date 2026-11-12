@@ -178,7 +178,10 @@ jobs:
         run: |
           set "MAKENSIS=C:\Program Files (x86)\NSIS\makensis.exe"
           if not exist "%MAKENSIS%" set "MAKENSIS=makensis"
-          "%MAKENSIS%" /DVER=%VER% /DDIST=dist\dwg2pdf /DOUTFILE=dwg2pdf-%VER%-windows-x64-setup.exe packaging\installer.nsi
+          rem Absolute paths everywhere: NSIS resolves relative File/icon paths
+          rem against the SCRIPT dir, not the process CWD (learned from two
+          rem failed builds). %CD% is the repo root here.
+          "%MAKENSIS%" /DVER=%VER% "/DDIST=%CD%\dist\dwg2pdf" "/DOUTFILE=%CD%\dwg2pdf-%VER%-windows-x64-setup.exe" "%CD%\packaging\installer.nsi"
 
       - name: Silent-install the built installer and verify
         shell: bash
