@@ -36,6 +36,15 @@ pip install git+https://github.com/huanxiang666/dwg2pdf.git
 
 Run `dwg2pdf --check` to verify your environment.
 
+## v0.3.0 highlights
+
+- **CAD-viewer-style GUI**: ttkbootstrap theme, three-pane layout (files | preview canvas | options), live status bar with ETA + CPU%.
+- **Drawing preview**: wheel-zoom / right-drag-pan raster preview via a custom Pillow replay backend (zero new dependencies). 57 MB drawing: preview in 15 s.
+- **Region export**: rubber-band a rectangle on the preview → export exactly that window as a vector PDF → print / open / reveal. Crop-based (34k records → 4k), 6–8 s with a single-entry DXF cache.
+- **Engine Assistant**: in-app multi-source download of the LibreDWG engine (official GitHub + 3 mirrors + optional Go fast core) — parallel speed test picks the fastest (measured 5x spread), 4-thread HTTP Range download with resume, zip verification, auto-install into the user engine dir.
+- **Manual update check**: GitHub Releases query filtered to this GUI release train by asset naming (never confuses the separate Go CLI train), shows changelog + download page; never phones home automatically.
+- **Go fast core (experimental)**: optional renderer from this repo's second release train; any failure falls back to the built-in renderer with a warning.
+
 ## v0.2.0 highlights
 
 - **Installers**: Windows NSIS setup (.exe, silent `/S` supported), Linux `.deb` (bundles the LibreDWG DWG engine — DWG works out of the box), plus portable zip/tar.gz and an experimental macOS arm64 build. All assets ship with sha256 checksums.

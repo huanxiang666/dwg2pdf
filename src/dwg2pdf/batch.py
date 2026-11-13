@@ -212,6 +212,46 @@ def _large_drawing_note(dxf_path: Path, opts: ConvertOptions) -> str | None:
     return None
 
 
+def _render_dxf(dxf_path: Path, target: Path, opts: ConvertOptions,
+                result: "FileResult", progress) -> "RenderResultLike":
+    """Render one DXF with the selected core; Go core falls back to Python.
+
+    Returns the render stats object (RenderResult for Python, a shim for Go).
+    Appends warnings to ``result`` when a fallback happens or when options
+    are ignored by the Go core.
+    """
+    if opts.core == "go":
+        from . import go_core
+
+        if go_core.find_go_core() is None:
+            result.warnings.append(
+                "core=go 但未找到 Go 核心，已用内置渲染器（引擎助手里可下载）"
+            )
+        else:
+            if opts.layout not in ("auto", ""):
+                result.warnings.append(
+                    f"Go 核心不支持 layout={opts.layout}，按其默认布局输出"
+                )
+            try:
+                info = go_core.convert_with_go(dxf_path, target, opts)
+                return _GoRenderResult(info)
+            except Exception as exc:
+                result.warnings.append(
+                    f"Go 核心失败，已回退内置渲染器：{exc}"
+                )
+    return render_dxf_to_pdf(dxf_path, target, opts, progress=progress)
+
+
+class _GoRenderResult:
+    """RenderResult-compatible shim for a successful Go-core conversion."""
+
+    def __init__(self, info: dict):
+        self.pages = info.get("pages") or 1
+        self.layouts: list[str] = []
+        self.warnings: list[str] = []
+        self.seconds = info.get("seconds", 0.0)
+
+
 def convert_one(
     source: str | Path,
     target: str | Path,
@@ -250,13 +290,13 @@ def convert_one(
                 if note:
                     print(f"[warn] {source.name}: {note}", file=sys.stderr, flush=True)
                     result.warnings.append(note)
-                render = render_dxf_to_pdf(tmp_dxf, target, opts, progress=progress)
+                render = _render_dxf(tmp_dxf, target, opts, result, progress)
         else:
             note = _large_drawing_note(source, opts)
             if note:
                 print(f"[warn] {source.name}: {note}", file=sys.stderr, flush=True)
                 result.warnings.append(note)
-            render = render_dxf_to_pdf(source, target, opts, progress=progress)
+            render = _render_dxf(source, target, opts, result, progress)
 
         result.status = STATUS_OK
         result.pages = render.pages

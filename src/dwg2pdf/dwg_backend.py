@@ -109,9 +109,10 @@ def bundled_dwg2dxf() -> str | None:
 
     Linux release bundles carry a pinned LibreDWG dwg2dxf build under
     ``dwg2pdf/engine/`` (populated by the release workflow, included by the
-    PyInstaller spec). Windows bundles currently rely on ODA File Converter
-    instead — no trustworthy prebuilt dwg2dxf.exe exists for Windows and a
-    fragile cross-build is worse than a documented free install.
+    PyInstaller spec). Windows bundles do not embed the engine (license +
+    size); the in-app Engine Assistant downloads the official LibreDWG
+    win64 build into the user engine dir instead — see
+    ``_user_downloaded_engine``.
     """
     exe = "dwg2dxf.exe" if sys.platform == "win32" else "dwg2dxf"
     candidates = []
@@ -126,12 +127,33 @@ def bundled_dwg2dxf() -> str | None:
     return None
 
 
+def _user_downloaded_engine() -> str | None:
+    """Engine installed by the in-app downloader (engine_download module).
+
+    Windows users get ``libredwg-win64/dwg2dxf.exe`` (+ DLLs) from the
+    official LibreDWG GitHub release — no ODA install needed anymore.
+    """
+    try:
+        from .engine_download import user_engine_dir
+    except Exception:
+        return None
+    exe = "dwg2dxf.exe" if sys.platform == "win32" else "dwg2dxf"
+    root = user_engine_dir()
+    for cand in (root / "libredwg-win64" / exe, root / exe):
+        try:
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return str(cand)
+        except OSError:
+            continue
+    return None
+
+
 def detect_converter() -> DwgConverter | None:
     """Detect the best available DWG converter, or None.
 
     Order: ``DWG2PDF_CONVERTER`` env var, ODA File Converter (highest
-    fidelity), the bundled dwg2dxf engine (Linux releases), then any
-    ``dwg2dxf`` on PATH.
+    fidelity), the bundled dwg2dxf engine (Linux releases), the engine
+    installed by the in-app downloader, then any ``dwg2dxf`` on PATH.
     """
     env = os.environ.get(ENV_CONVERTER, "").strip()
     if env:
@@ -151,6 +173,9 @@ def detect_converter() -> DwgConverter | None:
     bundled = bundled_dwg2dxf()
     if bundled:
         return DwgConverter(kind=KIND_LIBREDWG, path=bundled)
+    downloaded = _user_downloaded_engine()
+    if downloaded:
+        return DwgConverter(kind=KIND_LIBREDWG, path=downloaded)
     dwg2dxf = shutil.which("dwg2dxf")
     if dwg2dxf:
         return DwgConverter(kind=KIND_LIBREDWG, path=dwg2dxf)

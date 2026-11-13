@@ -28,6 +28,9 @@ dependencies = [
     # ezdxf's drawing frontend does `import PIL.Image` at module load; Pillow
     # is not pulled in by ezdxf/pymupdf, so declare it explicitly.
     "pillow>=10",
+    # Modern ttk theming for the GUI; the GUI degrades gracefully to plain
+    # ttk when the import fails, but frozen builds always include it.
+    "ttkbootstrap>=1.10",
 ]
 
 [project.optional-dependencies]

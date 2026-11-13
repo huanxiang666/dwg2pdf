@@ -85,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-j", "--jobs", type=int, default=0, help="parallel workers across FILES (default: CPU cores; 1 = serial)")
     parser.add_argument("--threads", type=int, default=0, help="parallel workers for chunked rendering WITHIN one big drawing (default: 0 = auto; only active in serial/-j 1 mode)")
     parser.add_argument("--quality", default="balanced", choices=["fast", "balanced", "high"], help="render preset: fast (效率版), balanced (default), high (质量版)")
+    parser.add_argument("--core", default="auto", choices=["auto", "go"], help="auto = built-in renderer; go = optional Go fast core (falls back to built-in on any failure)")
     parser.add_argument("--skip-existing", action="store_true", help="skip files whose target PDF already exists")
     parser.add_argument("--font-dir", action="append", default=[], help="extra font directory (SHX/TTF), repeatable")
     parser.add_argument("--report", default=None, help="write a JSON report of the batch run to this file")
@@ -286,6 +287,7 @@ def main(argv: list[str] | None = None) -> int:
             chunk_records=args.chunk_records,
             threads=args.threads,
             quality=args.quality,
+            core=args.core,
             verbose=args.verbose,
         ).validate()
     except OptionError as exc:

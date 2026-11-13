@@ -9,14 +9,19 @@ Build:  pyinstaller packaging/dwg2pdf.spec --noconfirm
 """
 import os
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas, binaries, hiddenimports = [], [], []
-for _pkg in ("ezdxf", "pymupdf"):
+for _pkg in ("ezdxf", "pymupdf", "ttkbootstrap"):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b
     hiddenimports += _h
+
+# ttkbootstrap loads its theme definitions (ttkbootstrap.themes.standard /
+# legacy / builtin) via dynamic import — static analysis misses them and the
+# frozen app dies with KeyError: 'cosmo'/'flatly' at the first themed widget.
+hiddenimports += collect_submodules("ttkbootstrap")
 
 # Bundled CJK font (always present in the source tree).
 _font_dir = os.path.join(SPECPATH, os.pardir, "src", "dwg2pdf", "font_data")

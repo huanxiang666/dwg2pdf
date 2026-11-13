@@ -143,6 +143,9 @@ class ConvertOptions:
         quality: render quality preset — "fast" (效率版), "balanced" (default),
             "high" (质量版). Controls curve segment counts and flattening
             tolerance; see QUALITY_PRESETS.
+        core: "auto" = built-in Python renderer; "go" = the optional Go fast
+            core when installed (the GUI Engine Assistant can download it),
+            falling back to the Python renderer with a warning on any failure.
         verbose: surface extra diagnostics in logs.
     """
 
@@ -162,6 +165,7 @@ class ConvertOptions:
     chunk_records: int = 8000
     threads: int = 0
     quality: str = "balanced"
+    core: str = "auto"
     verbose: bool = False
 
     def validate(self) -> ConvertOptions:
@@ -193,6 +197,9 @@ class ConvertOptions:
             raise OptionError(
                 f"unknown quality {self.quality!r} (choose from: {', '.join(QUALITY_CHOICES)})"
             )
+        core = self.core.strip().lower()
+        if core not in ("auto", "go"):
+            raise OptionError(f"unknown core {self.core!r} (choose: auto, go)")
         return ConvertOptions(
             layout=layout,
             monochrome=bool(self.monochrome),
@@ -210,5 +217,6 @@ class ConvertOptions:
             chunk_records=int(self.chunk_records),
             threads=int(self.threads),
             quality=quality,
+            core=core,
             verbose=bool(self.verbose),
         )
