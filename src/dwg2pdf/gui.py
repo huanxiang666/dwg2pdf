@@ -749,14 +749,17 @@ class App:
             return
         self.status_var.set("正在导出所选区域…")
         self._log(f"区域导出：WCS ({p1[0]:.1f},{p1[1]:.1f})–({p2[0]:.1f},{p2[1]:.1f}) → {out}")
-        threading.Thread(target=self._region_worker, args=(p1, p2, out), daemon=True).start()
+        # Read the Tk variable HERE (main thread): touching Tk vars from the
+        # worker raises "main thread is not in main loop" on Windows.
+        mono = bool(self.mono_var.get())
+        threading.Thread(target=self._region_worker, args=(p1, p2, out, mono), daemon=True).start()
 
-    def _region_worker(self, p1, p2, out) -> None:
+    def _region_worker(self, p1, p2, out, mono) -> None:
         try:
             from .preview import export_region_pdf
 
             stats = export_region_pdf(self._pv_dxf, "Model", p1, p2, out,
-                                      monochrome=self.mono_var.get())
+                                      monochrome=mono)
             self.q.put(("region_done", stats))
         except Exception as exc:
             self.q.put(("region_error", f"{exc.__class__.__name__}: {exc}"))
