@@ -1,26 +1,26 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-build/
-dist/
-.venv/
-venv/
+# 构建产物
+/dist/
+/pkg/
+*.exe
+*.zip
+*.tar.gz
 
-# Test / tooling caches
-.pytest_cache/
-.coverage
-htmlcov/
-.ruff_cache/
+# 测试输出
+/test-out/
+*.pdf
+!internal/font/assets/*.ttf
 
-# Conversion smoke outputs
-smoke-out/
-*.part[0-9]*
+# 编辑器
+.vscode/
+.idea/
+*.swp
 
-# OS / editor
+# 系统
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
-src/dwg2pdf/engine/
+
+# 临时
+*.log
+fix.py
+go-preview.png
+scripts/__pycache__/
