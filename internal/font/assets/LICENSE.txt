@@ -1,0 +1,10 @@
+﻿Noto Sans SC (subset)
+=====================
+The embedded font in internal/font/assets/default.ttf is a subset of
+Noto Sans SC, distributed under the SIL Open Font License, Version 1.1.
+
+Original font: https://fonts.google.com/noto/specimen/Noto+Sans+SC
+License:       https://scripts.sil.org/OFL
+
+Characters included: ASCII, GB2312 level 1+2 Hanzi, engineering symbols.
+Generated with fontTools.subset from the variable Noto Sans SC TTF.
