@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dwg2pdf — DWG/DXF 批量转 PDF</title>
+<style>
+  :root { --accent:#0e7490; --bg:#eef1f4; --card:#fff; --line:#d8dee4; --text:#1f2430; --muted:#67707a; --bad:#b42318; --ok:#067647; --warn:#8a5a00; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body { margin:0; font:13px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); display:flex; flex-direction:column; }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:8px 14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  header .logo { font-weight:700; font-size:16px; margin-right:6px; }
+  header .ver { color:var(--muted); font-size:11px; margin-right:10px; }
+  button { border:1px solid var(--line); background:#fff; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:12.5px; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.primary:hover { filter:brightness(1.1); color:#fff; }
+  button.warn { background:#e8590c; border-color:#e8590c; color:#fff; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .spacer { flex:1; }
+  #banner { margin:8px 14px 0; border-radius:8px; padding:8px 12px; font-size:12.5px; display:none; }
+  #banner.warn { display:block; background:#fff7e6; border:1px solid #f0d9a8; color:var(--warn); }
+  #banner.ok { display:block; background:#e8f7ef; border:1px solid #b7e2c8; color:var(--ok); }
+  #banner button { margin-left:10px; padding:3px 10px; }
+  main { flex:1; display:grid; grid-template-columns:280px 1fr 300px; gap:10px; padding:10px 14px; min-height:0; }
+  .pane { background:var(--card); border:1px solid var(--line); border-radius:8px; display:flex; flex-direction:column; min-height:0; }
+  .pane h3 { margin:0; padding:8px 10px; font-size:12.5px; border-bottom:1px solid var(--line); color:var(--muted); font-weight:600; display:flex; gap:8px; align-items:center; }
+  .pane .body { flex:1; overflow:auto; padding:8px; min-height:0; }
+  #fileList { list-style:none; margin:0; padding:0; }
+  #fileList li { padding:5px 8px; border-radius:5px; cursor:pointer; display:flex; gap:6px; align-items:center; font-size:12.5px; word-break:break-all; }
+  #fileList li.sel { background:#dceef5; }
+  #fileList li .sz { color:var(--muted); font-size:11px; margin-left:auto; white-space:nowrap; }
+  .filebtns { display:flex; gap:6px; padding:8px; border-top:1px solid var(--line); flex-wrap:wrap; }
+  #previewWrap { position:relative; flex:1; overflow:hidden; background:#f7f9fa; min-height:0; }
+  #previewWrap svg { width:100%; height:100%; display:block; }
+  #previewHint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); pointer-events:none; text-align:center; padding:20px; }
+  #selBox { position:absolute; border:2px dashed #e8590c; background:rgba(232,89,12,.08); display:none; pointer-events:none; }
+  .pvtools { display:flex; gap:6px; padding:6px 8px; border-top:1px solid var(--line); align-items:center; flex-wrap:wrap; }
+  .pvtools .hint { color:var(--muted); font-size:11.5px; }
+  label.f { display:flex; gap:6px; align-items:center; margin-bottom:8px; font-size:12.5px; }
+  label.f > span:first-child { width:64px; color:var(--muted); flex:none; }
+  select,input[type=text] { flex:1; padding:5px 8px; border:1px solid var(--line); border-radius:5px; background:#fff; font-size:12.5px; min-width:0; }
+  .grp { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:10px; }
+  .grp h4 { margin:0 0 8px; font-size:12px; color:var(--muted); }
+  .engrow { display:flex; gap:6px; align-items:center; font-size:12.5px; margin-bottom:6px; }
+  .engrow .st { font-size:11px; padding:1px 7px; border-radius:9px; }
+  .st.on { background:#e8f7ef; color:var(--ok); }
+  .st.off { background:#fdecec; color:var(--bad); }
+  #log { background:#0f172a; color:#d7e3f4; font:11.5px/1.6 ui-monospace,Consolas,monospace; padding:8px 10px; height:150px; overflow:auto; white-space:pre-wrap; border-radius:8px; margin:0 14px 8px; }
+  #log a { color:#7dd3fc; }
+  #log .err { color:#ffb4b4; }
+  footer { background:var(--card); border-top:1px solid var(--line); padding:5px 14px; font-size:11.5px; color:var(--muted); display:flex; gap:16px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">dwg2pdf</span><span class="ver" id="ver"></span>
+  <button id="addFiles">＋ 添加文件</button>
+  <button id="addFolder">＋ 添加文件夹</button>
+  <button id="removeSel">－ 移除选中</button>
+  <button id="clearAll">清空</button>
+  <button class="primary" id="run">▶ 开始转换</button>
+  <button id="previewBtn">◎ 预览图纸</button>
+  <button class="warn" id="regionBtn">⛶ 框选导出</button>
+  <span class="spacer"></span>
+  <button id="envBtn">✓ 环境检查</button>
+  <button id="updBtn">⟳ 检查更新</button>
+  <button id="openOut">🗀 输出目录</button>
+  <button id="quit">退出程序</button>
+</header>
+<div id="banner"></div>
+<main>
+  <section class="pane">
+    <h3>文件列表 <span class="spacer"></span><span id="fileCount"></span></h3>
+    <div class="body"><ul id="fileList"></ul></div>
+    <div class="filebtns">
+      <label style="display:flex;gap:5px;align-items:center;font-size:12px"><input type="checkbox" id="recursive" checked> 含子文件夹</label>
+    </div>
+  </section>
+  <section class="pane">
+    <h3>预览 <span class="hint" style="font-weight:400">（滚轮缩放 · 拖拽平移 · 框选导出局部）</span></h3>
+    <div id="previewWrap">
+      <div id="previewHint">预览使用：<br>1. 左侧选中一个 DWG/DXF 文件<br>2. 点「◎ 预览图纸」<br>3. 滚轮缩放、按住拖拽平移<br><br>框选导出：点「⛶ 框选导出」进入选区模式，<br>在图上拖出矩形 → 自动导出该区域的矢量 PDF。</div>
+      <div id="selBox"></div>
+    </div>
+    <div class="pvtools">
+      <button id="zoomIn">＋</button><button id="zoomOut">－</button><button id="zoomFit">适应</button>
+      <span class="hint" id="pvInfo"></span>
+    </div>
+  </section>
+  <section class="pane">
+    <h3>转换选项</h3>
+    <div class="body">
+      <div class="grp">
+        <h4>引擎（DWG→DXF）</h4>
+        <div id="engineRows"></div>
+        <label class="f"><span>本次使用</span><select id="engine"></select></label>
+      </div>
+      <div class="grp">
+        <h4>输出</h4>
+        <label class="f"><span>质量档</span><select id="quality">
+          <option value="draft">draft — 快速（线宽）</option>
+          <option value="balanced" selected>balanced — 标准（默认）</option>
+          <option value="high">high — 精细</option>
+        </select></label>
+        <label class="f"><span>纸张</span><select id="paper">
+          <option value="auto" selected>auto — 按图纸内容</option>
+          <option value="a0">A0</option><option value="a1">A1</option><option value="a2">A2</option>
+          <option value="a3">A3</option><option value="a4">A4</option>
+        </select></label>
+        <label class="f"><span></span><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="mono"> 单色输出（黑白打印）</label></label>
+        <label class="f"><span></span><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="skipExist"> 跳过已存在的 PDF</label></label>
+        <label class="f"><span>输出到</span><input type="text" id="outdir" placeholder="留空 = 下载；填写服务器目录则直接落盘"></label>
+      </div>
+      <div class="grp">
+        <h4>字体库</h4>
+        <div id="fontInfo" style="font-size:12px;color:var(--muted);margin-bottom:6px"></div>
+        <label class="f"><span>追加目录</span><input type="text" id="fontDir" placeholder="例如 D:\fonts（含 SHX/TTF）"></label>
+        <button id="fontAdd" style="width:100%">添加字体目录</button>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="log"></div>
+<footer>
+  <span id="stProgress">就绪</span>
+  <span id="stEngine"></span>
+  <span class="spacer"></span>
+  <span>全部处理在本机完成 · 界面右上角可退出服务</span>
+</footer>
+<input type="file" id="picker" multiple accept=".dwg,.dxf" hidden>
+<input type="file" id="folderPicker" multiple hidden webkitdirectory>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let files = [];          // {name,size,file}
+let selIdx = -1;
+let vb = null;           // 当前 viewBox {x,y,w,h}
+let vbHome = null;
+let regionMode = false;
+let engines = [];
+
+function log(msg, cls){
+  const el = document.createElement("div");
+  if(cls) el.className = cls;
+  el.innerHTML = "";
+  el.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
+  $("log").appendChild(el);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+function logHTML(html){
+  const el = document.createElement("div");
+  el.innerHTML = html;
+  $("log").appendChild(el);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+function renderFiles(){
+  const ul = $("fileList");
+  ul.innerHTML = "";
+  files.forEach((f,i)=>{
+    const li = document.createElement("li");
+    if(i===selIdx) li.className="sel";
+    const s1 = document.createElement("span");
+    s1.textContent = f.name;
+    const s2 = document.createElement("span");
+    s2.className="sz";
+    s2.textContent = (f.size/1024/1024).toFixed(2)+" MB";
+    li.appendChild(s1); li.appendChild(s2);
+    li.onclick = ()=>{ selIdx = i; renderFiles(); };
+    ul.appendChild(li);
+  });
+  $("fileCount").textContent = files.length + " 个文件";
+}
+$("addFiles").onclick = ()=>$("picker").click();
+$("addFolder").onclick = ()=>$("folderPicker").click();
+$("picker").onchange = e=>{ pushFiles(e.target.files); e.target.value=""; };
+$("folderPicker").onchange = e=>{
+  const list = [...e.target.files];
+  if(!$("recursive").checked){
+    // 只保留顶层：webkitdirectory 给相对路径，取第一段后的第一层
+    const top = list.filter(f=> (f.webkitRelativePath||"").split("/").length <= 2);
+    pushFiles(top);
+  } else pushFiles(list);
+  e.target.value="";
+};
+function pushFiles(list){
+  for(const f of list){
+    const ext = f.name.toLowerCase().split(".").pop();
+    if(ext!=="dwg" && ext!=="dxf"){ log("跳过不支持的文件: "+f.name, "err"); continue; }
+    files.push({name:f.name, size:f.size, file:f});
+  }
+  renderFiles();
+}
+$("removeSel").onclick = ()=>{ if(selIdx>=0){ files.splice(selIdx,1); selIdx=-1; renderFiles(); } };
+$("clearAll").onclick = ()=>{ files=[]; selIdx=-1; renderFiles(); };
+
+async function refreshEnv(){
+  try{
+    const r = await fetch("/api/check"); const j = await r.json();
+    $("ver").textContent = "v"+j.version+"  "+j.platform;
+    engines = j.engines||[];
+    const sel = $("engine");
+    sel.innerHTML = "";
+    const optAuto = document.createElement("option");
+    optAuto.value="auto"; optAuto.textContent="auto — 自动回退（推荐）";
+    sel.appendChild(optAuto);
+    const rows = $("engineRows"); rows.innerHTML="";
+    engines.forEach(e=>{
+      const o = document.createElement("option");
+      o.value = e.kind; o.textContent = e.name + (e.available? "" : "（未安装）");
+      o.disabled = !e.available;
+      sel.appendChild(o);
+      const row = document.createElement("div"); row.className="engrow";
+      const st = document.createElement("span"); st.className = "st "+(e.available?"on":"off");
+      st.textContent = e.available? "可用":"缺失";
+      const nm = document.createElement("span"); nm.textContent = e.name + (e.path? "  "+e.path : "");
+      row.appendChild(st); row.appendChild(nm);
+      if(!e.available){
+        if(e.kind==="libredwg"){
+          const b = document.createElement("button"); b.textContent="一键下载";
+          b.onclick = async ()=>{
+            b.disabled=true; b.textContent="下载中…";
+            log("开始下载 LibreDWG 便携版（约 33 MB）…");
+            try{
+              const rr = await fetch("/api/engine/download",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({kind:"libredwg"})});
+              const jj = await rr.json();
+              if(jj.ok){ log("LibreDWG 已安装到 "+jj.dir); refreshEnv(); }
+              else { log("下载失败: "+jj.error, "err"); }
+            }catch(err){ log("下载失败: "+err, "err"); }
+            b.disabled=false; b.textContent="一键下载";
+          };
+          row.appendChild(b);
+        } else {
+          const b = document.createElement("button"); b.textContent="去官网下载";
+          b.onclick = ()=>{ window.open("https://www.opendesign.com/guestfiles/oda_file_converter","_blank"); };
+          row.appendChild(b);
+        }
+      }
+      rows.appendChild(row);
+    });
+    const avail = engines.filter(e=>e.available);
+    const banner = $("banner");
+    if(avail.length){
+      banner.className="ok";
+      banner.textContent = "环境就绪：DWG 引擎 = " + avail.map(e=>e.name).join("、") + "；字体 " + (j.fonts||[]).length + " 个。";
+    } else {
+      banner.className="warn";
+      banner.textContent = "";
+      banner.append("未检测到 DWG 引擎：.dxf 可直接转换；.dwg 请先一键下载 LibreDWG 或安装 ODA。");
+    }
+    $("stEngine").textContent = "引擎: " + (avail.length? avail.map(e=>e.kind).join("+") : "无（仅 DXF）");
+    $("fontInfo").textContent = "已加载字体 " + (j.fonts||[]).length + " 个；目录 " + ((j.dirs||[]).length||0) + " 个追加";
+  }catch(e){ log("环境检查失败: "+e, "err"); }
+}
+$("envBtn").onclick = refreshEnv;
+
+$("updBtn").onclick = async ()=>{
+  log("检查更新…");
+  try{
+    const r = await fetch("/api/version-check"); const j = await r.json();
+    if(!j.ok){ log("检查更新失败: "+(j.error||""), "err"); return; }
+    if(j.updateAvailable){ logHTML('发现新版本 v'+j.latest+'（当前 v'+j.current+'）：<a href="'+j.url+'" target="_blank">'+j.url+'</a>'); }
+    else { log("已是最新版本 v"+j.current); }
+  }catch(e){ log("检查更新失败: "+e, "err"); }
+};
+
+$("fontAdd").onclick = async ()=>{
+  const dir = $("fontDir").value.trim();
+  if(!dir){ alert("请填写字体目录"); return; }
+  const r = await fetch("/api/fonts/add",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dir})});
+  const j = await r.json();
+  if(j.ok){ log("字体目录已添加，当前字体 "+j.fonts.length+" 个"); refreshEnv(); }
+  else { log("添加失败: "+j.error, "err"); }
+};
+
+$("openOut").onclick = async ()=>{
+  const dir = $("outdir").value.trim();
+  if(!dir){ alert("请先在右侧「输出到」填写一个目录"); return; }
+  const r = await fetch("/api/open-dir",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:dir})});
+  const j = await r.json();
+  if(!j.ok) log("打开目录失败: "+j.error, "err");
+};
+
+// ---------- 预览 ----------
+let curSVG = null, curFile = null;
+$("previewBtn").onclick = async ()=>{
+  if(selIdx < 0){ alert("先在左侧选中一个文件"); return; }
+  const f = files[selIdx];
+  curFile = f;
+  log("预览 " + f.name + " …");
+  $("stProgress").textContent = "预览中…";
+  const fd = new FormData();
+  fd.append("files", f.file);
+  fd.append("monochrome", $("mono").checked?"true":"false");
+  fd.append("engine", $("engine").value);
+  try{
+    const r = await fetch("/api/preview",{method:"POST",body:fd});
+    const j = await r.json();
+    if(!j.ok){ log("预览失败: "+j.error, "err"); $("stProgress").textContent="预览失败"; return; }
+    showSVG(j.preview);
+    log("预览就绪：" + j.preview.entityCount + " 个图元");
+  }catch(e){ log("预览失败: "+e, "err"); }
+  $("stProgress").textContent = "就绪";
+};
+function showSVG(p){
+  const wrap = $("previewWrap");
+  const old = wrap.querySelector("svg");
+  if(old) old.remove();
+  const holder = document.createElement("div");
+  holder.innerHTML = p.svg;
+  const svg = holder.firstChild;
+  svg.id = "pvsvg";
+  wrap.insertBefore(svg, $("selBox"));
+  $("previewHint").style.display = "none";
+  vbHome = {x:p.minX, y:-p.maxY, w:p.maxX-p.minX, h:p.maxY-p.minY};
+  vb = {...vbHome};
+  applyVB();
+  $("pvInfo").textContent = "图元 " + p.entityCount + " · 范围 " + Math.round(vbHome.w) + "×" + Math.round(vbHome.h);
+  bindSVG(svg);
+}
+function applyVB(){
+  const svg = $("pvsvg");
+  if(!svg || !vb) return;
+  svg.setAttribute("viewBox", vb.x+" "+vb.y+" "+vb.w+" "+vb.h);
+}
+function bindSVG(svg){
+  svg.addEventListener("wheel", e=>{
+    e.preventDefault();
+    const pt = svgPoint(svg, e);
+    const k = e.deltaY > 0 ? 1.2 : 1/1.2;
+    vb = {x: pt.x - (pt.x - vb.x)*k, y: pt.y - (pt.y - vb.y)*k, w: vb.w*k, h: vb.h*k};
+    applyVB();
+  }, {passive:false});
+  let drag=null;
+  svg.addEventListener("pointerdown", e=>{
+    if(regionMode){ regionDown(svg,e); return; }
+    drag = {sx:e.clientX, sy:e.clientY, vx:vb.x, vy:vb.y};
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", e=>{
+    if(regionMode){ regionMove(svg,e); return; }
+    if(!drag) return;
+    const r = svg.getBoundingClientRect();
+    const scale = Math.min(r.width/vb.w, r.height/vb.h);
+    vb.x = drag.vx - (e.clientX-drag.sx)/scale;
+    vb.y = drag.vy - (e.clientY-drag.sy)/scale;
+    applyVB();
+  });
+  svg.addEventListener("pointerup", e=>{
+    if(regionMode){ regionUp(svg,e); return; }
+    drag=null;
+  });
+}
+function svgPoint(svg, e){
+  const m = svg.getScreenCTM();
+  if(!m) return {x:0,y:0};
+  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
+  return {x:p.x, y:p.y};
+}
+$("zoomIn").onclick = ()=>{ if(vb){ const k=1/1.25; vb={x:vb.x+vb.w*(1-k)/2,y:vb.y+vb.h*(1-k)/2,w:vb.w*k,h:vb.h*k}; applyVB(); } };
+$("zoomOut").onclick = ()=>{ if(vb){ const k=1.25; vb={x:vb.x+vb.w*(1-k)/2,y:vb.y+vb.h*(1-k)/2,w:vb.w*k,h:vb.h*k}; applyVB(); } };
+$("zoomFit").onclick = ()=>{ if(vbHome){ vb={...vbHome}; applyVB(); } };
+
+// ---------- 框选导出 ----------
+let regionStart=null;
+$("regionBtn").onclick = ()=>{
+  if(!$("pvsvg")){ alert("请先预览一张图纸"); return; }
+  regionMode = !regionMode;
+  $("regionBtn").textContent = regionMode ? "⛶ 取消框选" : "⛶ 框选导出";
+  $("selBox").style.display = "none";
+  log(regionMode ? "框选模式：在图上拖出矩形，松开即导出该区域 PDF" : "已退出框选模式");
+};
+function regionDown(svg,e){
+  regionStart = svgPoint(svg,e);
+  $("selBox").style.display="block";
+}
+function regionMove(svg,e){
+  if(!regionStart) return;
+  const p = svgPoint(svg,e);
+  const r = svg.getBoundingClientRect();
+  const scale = Math.min(r.width/vb.w, r.height/vb.h);
+  const offX = (r.width - vb.w*scale)/2, offY = (r.height - vb.h*scale)/2;
+  const toScreen = pt => ({x: (pt.x - vb.x)*scale + offX, y: (pt.y - vb.y)*scale + offY});
+  const a = toScreen(regionStart), b = toScreen(p);
+  const box = $("selBox");
+  box.style.left = Math.min(a.x,b.x)+"px";
+  box.style.top = Math.min(a.y,b.y)+"px";
+  box.style.width = Math.abs(a.x-b.x)+"px";
+  box.style.height = Math.abs(a.y-b.y)+"px";
+  regionStart.cur = p;
+}
+async function regionUp(svg,e){
+  if(!regionStart || !regionStart.cur){ regionStart=null; return; }
+  const a = regionStart, b = regionStart.cur;
+  regionStart = null;
+  // SVG y 向下 = -图纸 y
+  const rect = {minX:Math.min(a.x,b.x), maxX:Math.max(a.x,b.x), minY:-Math.max(a.y,b.y), maxY:-Math.min(a.y,b.y)};
+  if(rect.maxX-rect.minX < 1e-6 || rect.maxY-rect.minY < 1e-6){ $("selBox").style.display="none"; return; }
+  log("导出区域 ("+Math.round(rect.minX)+","+Math.round(rect.minY)+")-("+Math.round(rect.maxX)+","+Math.round(rect.maxY)+") …");
+  const fd = new FormData();
+  fd.append("files", curFile.file);
+  fd.append("minX", rect.minX); fd.append("minY", rect.minY);
+  fd.append("maxX", rect.maxX); fd.append("maxY", rect.maxY);
+  fd.append("engine", $("engine").value);
+  fd.append("monochrome", $("mono").checked?"true":"false");
+  try{
+    const r = await fetch("/api/export-region",{method:"POST",body:fd});
+    const j = await r.json();
+    if(j.ok){ logHTML('区域 PDF 已生成：<a href="'+j.download+'" download>下载</a>'); }
+    else log("框选导出失败: "+j.error, "err");
+  }catch(err){ log("框选导出失败: "+err, "err"); }
+  $("selBox").style.display="none";
+}
+
+// ---------- 转换 ----------
+$("run").onclick = async ()=>{
+  if(!files.length){ alert("请先添加 .dwg / .dxf 文件"); return; }
+  $("run").disabled = true;
+  $("stProgress").textContent = "转换中 0/" + files.length;
+  const t0 = Date.now();
+  const fd = new FormData();
+  fd.append("monochrome", $("mono").checked?"true":"false");
+  fd.append("paper", $("paper").value);
+  fd.append("engine", $("engine").value);
+  fd.append("quality", $("quality").value);
+  fd.append("skipExisting", $("skipExist").checked?"true":"false");
+  if($("outdir").value.trim()) fd.append("outdir", $("outdir").value.trim());
+  files.forEach(f=>fd.append("files", f.file));
+  try{
+    const r = await fetch("/api/convert",{method:"POST",body:fd});
+    const j = await r.json();
+    (j.results||[]).forEach(x=>{
+      if(x.err) log("✗ "+x.name+"  "+x.err, "err");
+      else log("✓ "+x.name+"  ("+x.sec.toFixed(1)+"s)");
+    });
+    if(j.download){ logHTML('下载结果：<a href="'+j.download+'" download="'+(j.filename||"result")+'">'+(j.filename||"result")+'</a>'); }
+    if($("outdir").value.trim()) log("已输出到服务器目录: "+$("outdir").value.trim());
+  }catch(e){ log("转换请求失败: "+e, "err"); }
+  $("stProgress").textContent = "完成，用时 " + ((Date.now()-t0)/1000).toFixed(1) + "s";
+  $("run").disabled = false;
+};
+
+$("quit").onclick = async ()=>{
+  if(!confirm("确定退出 dwg2pdf 界面服务？")) return;
+  try{ await fetch("/api/shutdown",{method:"POST"}); }catch(e){}
+  document.body.innerHTML = "<div style='padding:60px;text-align:center;font-size:16px'>程序已退出，可以关闭本标签页。</div>";
+};
+
+refreshEnv();
+renderFiles();
+log("界面已就绪。添加图纸后即可转换；DWG 需要引擎（见右侧或顶部横幅）。");
+</script>
+</body>
+</html>
